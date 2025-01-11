@@ -1,0 +1,12 @@
+*.pt
+*.tif
+*.jpg
+*.jpeg
+*.png
+*.csv
+data/raw/rotated
+wandb
+*pycache*
+*.zip
+__pycache__
+.ipynb_checkpoints 
