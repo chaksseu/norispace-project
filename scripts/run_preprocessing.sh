@@ -1,32 +1,38 @@
 #!/bin/bash
-################################################################################
-# run_preprocessing.sh
-# 사용 예시:
-#   chmod +x run_preprocessing.sh
-#   ./run_preprocessing.sh
-################################################################################
-
-# 가상환경 활성화 예시 (필요 시 주석 해제)
-# source /path/to/venv/bin/activate
 
 ################################################################################
 # 파라미터 설정
 ################################################################################
 YOLO_MODEL_PATH="Noris_YOLO.pt"       # YOLO 모델(.pt) 경로
-INPUT_DIR="dataset/normal"            # 원본 normal/fruad 데이터 폴더
-PROCESSED_DIR="processed_dataset_test"  # 최종 YOLO/전처리 결과가 쌓일 폴더
 
-BATCH_SIZE=64
+# normal 또는 fraud
+LABEL="fraud"
+# 원본 데이터 폴더 (예: "dataset/normal" 또는 "dataset/fraud")
+INPUT_DIR="dataset/$LABEL"
+# 결과물이 저장될 폴더 (anchor, pos, neg 이미지 + CSV)
+PROCESSED_DIR="processed_dataset_$LABEL"
+
+# LABEL에 따라 train, val, test 비율 설정
+if [ "$LABEL" == "normal" ]; then
+  TRAIN_RATIO=0.8
+  VAL_RATIO=0.1
+  TEST_RATIO=0.1
+elif [ "$LABEL" == "fraud" ]; then
+  TRAIN_RATIO=0.0
+  VAL_RATIO=0.5
+  TEST_RATIO=0.5
+else
+  echo "Invalid LABEL value. Please use 'normal' or 'fraud'."
+  exit 1
+fi
+
+BATCH_SIZE=32
 MARGIN=50
-NEGATIVE_PER_IMAGE=20
-NUM_WORKERS=8
-GENERATE_NEG="--generate_negatives"   # neg 이미지를 생성하려면 플래그 추가
-# GENERATE_NEG=""                     # neg를 생성하지 않으려면 주석 처리
+NEGATIVE_PER_IMAGE=8
+NUM_WORKERS=4
+
 
 SPLIT_SEED=42
-TRAIN_RATIO=0.8
-VAL_RATIO=0.1
-TEST_RATIO=0.1
 
 ################################################################################
 # 파이썬 스크립트 실행
@@ -43,4 +49,5 @@ python src/data_preprocess.py \
   --train_ratio "${TRAIN_RATIO}" \
   --val_ratio "${VAL_RATIO}" \
   --test_ratio "${TEST_RATIO}" \
-  ${GENERATE_NEG}
+  --generate_negatives \
+  --label "${LABEL}"
