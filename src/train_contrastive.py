@@ -18,9 +18,6 @@ from tqdm import tqdm
 from sklearn.metrics import (
     precision_recall_fscore_support,
     average_precision_score,
-    precision_recall_curve,
-    roc_auc_score,
-    roc_curve,
     auc,
     accuracy_score
 )
@@ -30,10 +27,14 @@ import matplotlib.pyplot as plt
 import wandb
 from PIL import Image
 
+
 def parse_args():
+    """
+    Parses command-line arguments for configuring the training and evaluation process.
+    """
     parser = argparse.ArgumentParser(description="Contrastive Learning with Normal-only training & Mixed Normal+Fraud evaluation")
 
-    # 경로 설정
+    # Directory paths
     parser.add_argument("--normal_data_dir", type=str, required=True,
                         help="Path to the Normal dataset root (train/anchor|pos|neg, val/..., test/...)")
     parser.add_argument("--fraud_data_dir", type=str, required=True,
@@ -49,12 +50,14 @@ def parse_args():
     parser.add_argument("--save_epoch", type=int, default=5)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    parser.add_argument("--mixed_precision", type=str, default="no")
 
-    # Model
+
+    # Model configuration
     parser.add_argument("--pretrained", action="store_true",
                         help="Use pretrained ConvNeXt-Small model")
 
-    # W&B
+    # Weights & Biases configuration
     parser.add_argument("--wandb_project", type=str, default="contrastive_learning")
     parser.add_argument("--wandb_entity", type=str, default=None)
     parser.add_argument("--wandb_run_name", type=str, default=None)
@@ -67,27 +70,33 @@ def parse_args():
 ###############################################################################
 class ANPTrainDataset(Dataset):
     """
-    Training용 Dataset (Normal-only):
-    normal_data_dir/train/anchor, normal_data_dir/train/pos, normal_data_dir/train/neg
-    에서 prefix를 추출하여 (anchor, pos, neg) 로드합니다.
+    Training Dataset for Normal-only data using Triplet Loss.
+    Loads triplets of (anchor, positive, negative) images from the specified directories.
     """
+
     def __init__(self, normal_data_dir, transform=None):
         super().__init__()
         self.root_dir = normal_data_dir
         self.transform = transform
 
+        # Define directories for anchor, positive, and negative samples
         self.anchor_dir = os.path.join(self.root_dir, "train", "anchor")
-        self.pos_dir    = os.path.join(self.root_dir, "train", "pos")
-        self.neg_dir    = os.path.join(self.root_dir, "train", "neg")
+        self.pos_dir = os.path.join(self.root_dir, "train", "pos")
+        self.neg_dir = os.path.join(self.root_dir, "train", "neg")
 
+        # Verify that all necessary directories exist
         if not all([os.path.isdir(self.anchor_dir),
                     os.path.isdir(self.pos_dir),
                     os.path.isdir(self.neg_dir)]):
             raise ValueError(f"Train directories not found under: {self.root_dir}")
 
-        anchor_files = [f for f in os.listdir(self.anchor_dir)
-                        if f.lower().endswith(('.png', '.jpg', '.jpeg')) and "_anchor" in f]
-        # prefix: 예) "xxxxx_anchor.png" -> "xxxxx"
+        # List all anchor files with the "_anchor" suffix
+        anchor_files = [
+            f for f in os.listdir(self.anchor_dir)
+            if f.lower().endswith(('.png', '.jpg', '.jpeg')) and "_anchor" in f
+        ]
+
+        # Extract unique prefixes to identify corresponding pos and neg samples
         self.samples = []
         for af in anchor_files:
             prefix = af.rsplit("_anchor", 1)[0]
@@ -102,20 +111,20 @@ class ANPTrainDataset(Dataset):
     def __getitem__(self, idx):
         prefix = self.samples[idx]
 
-        # anchor
+        # Load anchor image
         anchor_filename = f"{prefix}_anchor.png"
         anchor_path = os.path.join(self.anchor_dir, anchor_filename)
         anchor_img = self._load_img(anchor_path)
 
-        # pos
+        # Load positive image
         pos_filename = f"{prefix}_pos.png"
         pos_path = os.path.join(self.pos_dir, pos_filename)
         pos_img = self._load_img(pos_path)
 
-        # neg
+        # Load a random negative image corresponding to the prefix
         neg_candidates = [
             f for f in os.listdir(self.neg_dir)
-            if f.startswith(prefix + "_neg_") and f.lower().endswith(('.png','.jpg','.jpeg'))
+            if f.startswith(prefix + "_neg_") and f.lower().endswith(('.png', '.jpg', '.jpeg'))
         ]
         if not neg_candidates:
             raise ValueError(f"No neg files found for prefix={prefix} in {self.neg_dir}")
@@ -130,6 +139,9 @@ class ANPTrainDataset(Dataset):
         }
 
     def _load_img(self, path):
+        """
+        Loads an image from the specified path and applies transformations if any.
+        """
         if not os.path.exists(path):
             raise FileNotFoundError(f"File not found: {path}")
         img = Image.open(path).convert("RGB")
@@ -140,28 +152,28 @@ class ANPTrainDataset(Dataset):
 
 ###############################################################################
 # 2) MixedValTestDataset: (val, test) => Normal + Fraud
-#    => anchor-pos 쌍, 라벨은 normal=1, fraud=0
+#    => anchor-pos pairs, labels: normal=0, fraud=1
 ###############################################################################
 class MixedValTestDataset(Dataset):
     """
-    Val/Test용 Dataset:
-    - normal_data_dir/{val|test}/anchor + pos
-    - fraud_data_dir/{val|test}/anchor + pos
-    를 동등하게 섞는다.
+    Validation/Test Dataset combining Normal and Fraud data.
+    Loads anchor-pos pairs with labels indicating Normal (0) or Fraud (1).
     """
+
     def __init__(self, normal_data_dir, fraud_data_dir, mode="val", transform=None):
         super().__init__()
         self.transform = transform
         self.mode = mode
 
-        # 예: normal_data_dir/val/anchor, normal_data_dir/val/pos
+        # Define directories for Normal data
         self.normal_anchor_dir = os.path.join(normal_data_dir, mode, "anchor")
-        self.normal_pos_dir    = os.path.join(normal_data_dir, mode, "pos")
+        self.normal_pos_dir = os.path.join(normal_data_dir, mode, "pos")
 
-        # 예: fraud_data_dir/val/anchor, ...
+        # Define directories for Fraud data
         self.fraud_anchor_dir = os.path.join(fraud_data_dir, mode, "anchor")
-        self.fraud_pos_dir    = os.path.join(fraud_data_dir, mode, "pos")
+        self.fraud_pos_dir = os.path.join(fraud_data_dir, mode, "pos")
 
+        # List all anchor files for Normal and Fraud
         normal_anchor_files = [
             f for f in os.listdir(self.normal_anchor_dir)
             if f.lower().endswith(('.png', '.jpg', '.jpeg')) and "_anchor" in f
@@ -171,15 +183,15 @@ class MixedValTestDataset(Dataset):
             if f.lower().endswith(('.png', '.jpg', '.jpeg')) and "_anchor" in f
         ]
 
-        # 개수를 맞춤(최소 개수만큼)
+        # Shuffle and balance the number of Normal and Fraud samples
         np.random.shuffle(normal_anchor_files)
         np.random.shuffle(fraud_anchor_files)
         min_count = min(len(normal_anchor_files), len(fraud_anchor_files))
         self.normal_anchor_files = normal_anchor_files[:min_count]
-        self.fraud_anchor_files  = fraud_anchor_files[:min_count]
+        self.fraud_anchor_files = fraud_anchor_files[:min_count]
 
-        # (prefix, label) = ( "xxx", 1 ) for normal / ( "yyy", 0 ) for fraud
-        # anchor 파일명: e.g., "somefile_anchor.png" -> prefix = "somefile"
+        # Create samples with corresponding labels
+        # label: normal=0, fraud=1
         self.samples = []
         for naf in self.normal_anchor_files:
             prefix = naf.rsplit("_anchor", 1)[0]
@@ -188,7 +200,7 @@ class MixedValTestDataset(Dataset):
             prefix = faf.rsplit("_anchor", 1)[0]
             self.samples.append((prefix, 1))  # fraud=1
 
-        # 섞기
+        # Shuffle the combined samples
         np.random.shuffle(self.samples)
         print(f"[MixedValTestDataset-{mode}] Normal+Fraud => {len(self.samples)} samples")
 
@@ -198,39 +210,49 @@ class MixedValTestDataset(Dataset):
     def __getitem__(self, idx):
         prefix, label = self.samples[idx]
 
-        if label == 1:  # normal
+        # Select appropriate directories based on the label
+        if label == 0:  # normal
             anchor_dir = self.normal_anchor_dir
-            pos_dir    = self.normal_pos_dir
+            pos_dir = self.normal_pos_dir
         else:           # fraud
             anchor_dir = self.fraud_anchor_dir
-            pos_dir    = self.fraud_pos_dir
+            pos_dir = self.fraud_pos_dir
 
+        # Load anchor and positive images
         anchor_path = os.path.join(anchor_dir, f"{prefix}_anchor.png")
-        pos_path    = os.path.join(pos_dir, f"{prefix}_pos.png")
+        pos_path = os.path.join(pos_dir, f"{prefix}_pos.png")
 
         anchor_img = Image.open(anchor_path).convert("RGB")
-        pos_img    = Image.open(pos_path).convert("RGB")
+        pos_img = Image.open(pos_path).convert("RGB")
         if self.transform:
             anchor_img = self.transform(anchor_img)
-            pos_img    = self.transform(pos_img)
+            pos_img = self.transform(pos_img)
 
-        # label=1(normal), 0(fraud)
         return {
             "anchor": anchor_img,
             "pos": pos_img,
-            "label": label
+            "label": label  # normal=0, fraud=1
         }
 
 
 ###############################################################################
-# ContrastiveLoss (Triplet)
+# Triplet 
 ###############################################################################
-class ContrastiveLoss(nn.Module):
+class TripletLoss(nn.Module):
+    """
+    Implements the Triplet Loss.
+    Encourages the distance between anchor and positive to be smaller than
+    the distance between anchor and negative by a margin.
+    """
+
     def __init__(self, margin=1.0):
         super().__init__()
         self.margin = margin
 
     def forward(self, anchor_emb, pos_emb, neg_emb):
+        """
+        Computes the contrastive loss based on anchor, positive, and negative embeddings.
+        """
         pos_dist = torch.nn.functional.pairwise_distance(anchor_emb, pos_emb)
         neg_dist = torch.nn.functional.pairwise_distance(anchor_emb, neg_emb)
         pos_loss = 0.5 * (pos_dist ** 2)
@@ -239,15 +261,19 @@ class ContrastiveLoss(nn.Module):
 
 
 def main():
-    # UndefinedMetricWarning 무시
+    """
+    The main function orchestrates the training and evaluation pipeline.
+    """
+    # Suppress warnings related to undefined metrics
     warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 
     args = parse_args()
 
-    accelerator = Accelerator()
-    accelerator.init_trackers("contrastive_learning", config=vars(args))
+    # Initialize the Accelerator for distributed training if applicable
+    accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps, mixed_precision=args.mixed_precision)
+    accelerator.init_trackers("Triplelet training", config=vars(args))
 
-    # W&B
+    # Initialize Weights & Biases (W&B) for experiment tracking
     if accelerator.is_main_process:
         wandb.init(
             project=args.wandb_project,
@@ -256,9 +282,10 @@ def main():
         )
         wandb.config.update(vars(args))
 
+    # Create the output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Pretrained transform
+    # Define transformations using pretrained ConvNeXt-Small weights
     weights = ConvNeXt_Small_Weights.IMAGENET1K_V1
     transform = weights.transforms()
 
@@ -268,6 +295,10 @@ def main():
     train_dataset = ANPTrainDataset(args.normal_data_dir, transform=transform)
 
     def collate_fn_train(batch):
+        """
+        Custom collate function for triplet training.
+        Stacks anchors, positives, and negatives separately.
+        """
         anchors, positives, negatives = [], [], []
         for b in batch:
             anchors.append(b["anchor"])
@@ -294,6 +325,10 @@ def main():
     )
 
     def collate_fn_eval(batch):
+        """
+        Custom collate function for evaluation datasets.
+        Stacks anchors, positives, and labels separately.
+        """
         anchors, poss, labels = [], [], []
         for b in batch:
             anchors.append(b["anchor"])
@@ -317,22 +352,30 @@ def main():
     )
 
     #---------------------------------------------------------------------------
-    # 모델 (anchor_model, posneg_model)
+    # Model Setup (anchor_model, posneg_model)
     #---------------------------------------------------------------------------
     def get_model(pretrained=True):
-        model = models.convnext_small(weights=ConvNeXt_Small_Weights.IMAGENET1K_V1 if pretrained else None)
+        """
+        Initializes the ConvNeXt-Small model, removing the final classification layer.
+        """
+        model = models.convnext_small(
+            weights=ConvNeXt_Small_Weights.IMAGENET1K_V1 if pretrained else None
+        )
+        # Remove the final classification layer to obtain feature embeddings
         model.classifier[2] = nn.Identity()
         return model
 
     anchor_model = get_model(pretrained=args.pretrained)
     posneg_model = get_model(pretrained=args.pretrained)
 
-    optimizer = optim.Adam(
+    # Initialize the optimizer with parameters from both models
+    optimizer = optim.AdamW(
         list(anchor_model.parameters()) + list(posneg_model.parameters()),
         lr=args.lr
     )
-    criterion = ContrastiveLoss(margin=1.0)
+    criterion = TripletLoss(margin=1.0)
 
+    # Prepare models, optimizer, and data loaders with Accelerator
     (
         anchor_model,
         posneg_model,
@@ -352,9 +395,12 @@ def main():
     global_step = 0
 
     #---------------------------------------------------------------------------
-    # Triplet forward
+    # Triplet Forward Pass
     #---------------------------------------------------------------------------
     def get_triplet_emb(anc, pos, neg):
+        """
+        Computes normalized embeddings for anchor, positive, and negative samples.
+        """
         anc_emb = anchor_model(anc)
         pos_emb = posneg_model(pos)
         neg_emb = posneg_model(neg)
@@ -364,9 +410,12 @@ def main():
         return anc_emb, pos_emb, neg_emb
 
     #---------------------------------------------------------------------------
-    # Train Loop
+    # Training Loop
     #---------------------------------------------------------------------------
     def train_one_epoch(loader, epoch, pbar):
+        """
+        Trains the model for one epoch using triplet loss.
+        """
         nonlocal global_step
         anchor_model.train()
         posneg_model.train()
@@ -379,16 +428,21 @@ def main():
             pos = pos.to(accelerator.device)
             neg = neg.to(accelerator.device)
 
+            # Get normalized embeddings
             anc_emb, pos_emb, neg_emb = get_triplet_emb(anc, pos, neg)
+
+            # Compute contrastive loss
             loss = criterion(anc_emb, pos_emb, neg_emb)
             loss = loss / args.gradient_accumulation_steps
 
+            # Backpropagate the loss
             accelerator.backward(loss)
 
             bs = anc.size(0)
             total_loss += (loss.item() * args.gradient_accumulation_steps * bs)
             total_samples += bs
 
+            # Perform optimizer step if accumulation steps are met
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad()
@@ -403,29 +457,47 @@ def main():
         return avg_loss
 
     #---------------------------------------------------------------------------
-    # Evaluation: Normal vs Fraud 분류
-    # distance <= threshold => Normal(1), distance > threshold => Fraud(0)
+    # Evaluation: Normal (0) vs Fraud (1) Classification
+    #         Uses discrete predictions based on distance thresholds
     #---------------------------------------------------------------------------
     def evaluate_balanced(loader, phase="val"):
+        """
+        Evaluates the model by computing distances between anchor and positive embeddings.
+        Logs key metrics directly to W&B without using tables.
+        """
         anchor_model.eval()
         posneg_model.eval()
 
         all_distances = []
         all_labels = []
+        
+
+        total_val_loss = 0.0
+        total_val_samples = 0
 
         with torch.no_grad():
             for anc, imgs, labels in loader:
                 anc = anc.to(accelerator.device)
                 imgs = imgs.to(accelerator.device)
-                # label = 0(normal), 1(fraud)
-                # => all_labels 에 확장
-                labels = labels.cpu().numpy()
+                labels = labels.cpu().numpy()  # normal=0, fraud=1
 
+                # Compute embeddings
                 anc_emb = anchor_model(anc)
                 img_emb = posneg_model(imgs)
                 anc_emb = nn.functional.normalize(anc_emb, p=2, dim=1)
                 img_emb = nn.functional.normalize(img_emb, p=2, dim=1)
 
+
+
+
+                #val_loss = criterion(anc_emb, pos_emb, neg_emb)
+                #bs = anc.size(0)
+                #total_val_loss += (val_loss.item() * bs)
+                #total_val_samples += bs
+
+
+
+                # Compute pairwise distances
                 dist = torch.nn.functional.pairwise_distance(anc_emb, img_emb)
                 dist = dist.cpu().numpy()
 
@@ -435,40 +507,47 @@ def main():
         all_distances = np.array(all_distances)
         all_labels = np.array(all_labels)
 
+
+        #avg_val_loss = total_val_loss / total_val_samples if total_val_samples else 0.0
+
+        # Skip evaluation if only one class is present
         if len(np.unique(all_labels)) < 2:
             if accelerator.is_main_process:
                 wandb.log({f"{phase}/info": "Only one class present, metrics undefined."})
             return
 
-        # "distance가 작으면 normal" 이므로, 점수(score) = -distance
-        # => score가 클수록 normal
-        scores = -all_distances
 
-        # 1) Average Precision
-        avg_precision = average_precision_score(all_labels, scores)
+        # Calculate average distances for each class
+        avg_distance_normal = np.mean(all_distances[all_labels == 0])
+        avg_distance_fraud = np.mean(all_distances[all_labels == 1])
 
-        # 2) Precision-Recall Curve
-        prec_curve, rec_curve, _ = precision_recall_curve(all_labels, scores)
-        pr_auc_value = auc(rec_curve, prec_curve)
+        if accelerator.is_main_process:
+            wandb.log({
+                f"{phase}/avg_distance_normal": avg_distance_normal,
+                f"{phase}/avg_distance_fraud": avg_distance_fraud,
+            })
 
-        # 3) ROC AUC
-        # roc_auc_value = roc_auc_score(all_labels, scores)
-        # fpr, tpr, _ = roc_curve(all_labels, scores)
-
-        # 4) Threshold sweep => acc, precision, recall, f1
-        thresholds = np.arange(0.0, 0.7, 0.01)
+        # Initialize lists to store metrics for each threshold
+        thresholds = np.linspace(0.0, 0.3, 30)  # 50 thresholds ranging from 0.0 to 0.5
         thr_metrics = []
-        for th in thresholds:
-            # distance <= th => normal(1)
-            # distance > th  => fraud(0)
-            # => distance <= th <=> -distance >= -th => scores >= -th
-            preds = np.where(all_distances <= th, 1, 0)
-            # 또는 preds = (scores >= -th).astype(int)
+        precisions = []
+        recalls = []
 
+        
+        for th in thresholds:
+            # Generate predictions based on the current threshold
+            # distance <= th => normal (0), distance > th => fraud (1)
+            preds = np.where(all_distances <= th, 0, 1)
+
+            # Compute precision, recall, F1-score
             precision, recall, f1, _ = precision_recall_fscore_support(
                 all_labels, preds, average='binary', zero_division=0
             )
+
+            # Compute accuracy
             acc = accuracy_score(all_labels, preds)
+
+            # Store the metrics
             thr_metrics.append({
                 "threshold": th,
                 "precision": precision,
@@ -476,34 +555,37 @@ def main():
                 "f1_score": f1,
                 "accuracy": acc
             })
+            precisions.append(precision)
+            recalls.append(recall)
+
+            # Log metrics for each threshold directly to W&B
             if accelerator.is_main_process:
                 wandb.log({
-                    f"{phase}_th_{th:.2f}/precision": precision,
-                    f"{phase}_th_{th:.2f}/recall": recall,
-                    f"{phase}_th_{th:.2f}/f1": f1,
-                    f"{phase}_th_{th:.2f}/accuracy": acc
+                    #f"{phase}/precision_threshold_{th:.2f}": precision,
+                    #f"{phase}/recall_threshold_{th:.2f}": recall,
+                    f"{phase}/f1_score_threshold_{th:.2f}": f1,
+                    f"{phase}/accuracy_threshold_{th:.2f}": acc
                 })
 
+        # Sort the (recall, precision) pairs based on recall for AP calculation
+        paired = sorted(zip(recalls, precisions), key=lambda x: x[0])
+        sorted_recalls = [p[0] for p in paired]
+        sorted_precisions = [p[1] for p in paired]
+
+        # Compute Area Under the PR Curve as Average Precision
+        pr_auc_value = auc(sorted_recalls, sorted_precisions)
+        avg_precision = average_precision_score(all_labels, -all_distances)  # Using -distance as score
+
         if accelerator.is_main_process:
-            # 5) Average Precision 로그
-            wandb.log({f"{phase}/average_precision": avg_precision})
+            # Log Average Precision
+            wandb.log({f"{phase}/pr_auc_value": pr_auc_value})
+            wandb.log({f"{phase}/avg_precision": avg_precision})
 
-            # 테이블 형태로 로깅
-            table = wandb.Table(columns=["Threshold", "Precision", "Recall", "F1 Score", "Accuracy"])
-            for metric in thr_metrics:
-                table.add_data(
-                    round(metric["threshold"], 2),
-                    round(metric["precision"], 4),
-                    round(metric["recall"], 4),
-                    round(metric["f1_score"], 4),
-                    round(metric["accuracy"], 4)
-                )
-            wandb.log({f"{phase}/Threshold Sweep Metrics": table})
-
-            # PR Curve
+            # Plot and log the PR Curve
             plt.figure(figsize=(8, 6))
-            plt.step(rec_curve, prec_curve, where='post', label=f'AP={avg_precision:.3f}, PR AUC={pr_auc_value:.3f}')
-            plt.fill_between(rec_curve, prec_curve, step='post', alpha=0.2)
+            plt.step(sorted_recalls, sorted_precisions, where='post',
+                     label=f'AP={avg_precision}, PR AUC={pr_auc_value:.3f}')
+            plt.fill_between(sorted_recalls, sorted_precisions, step='post', alpha=0.2)
             plt.xlabel('Recall')
             plt.ylabel('Precision')
             plt.title(f'{phase.capitalize()} PR Curve')
@@ -514,62 +596,49 @@ def main():
             plt.close()
             wandb.log({f"{phase}/precision_recall_curve": wandb.Image(pr_curve_path)})
 
-            # ROC Curve
-            '''
-            plt.figure(figsize=(8, 6))
-            plt.plot(fpr, tpr, label=f'ROC AUC={roc_auc_value:.3f}')
-            plt.plot([0,1],[0,1],'k--', label='Random')
-            plt.xlabel('False Positive Rate')
-            plt.ylabel('True Positive Rate')
-            plt.title(f'{phase.capitalize()} ROC Curve')
-            plt.grid(True)
-            plt.legend(loc='lower right')
-            roc_curve_path = os.path.join(args.output_dir, f"{phase}_roc_curve.png")
-            plt.savefig(roc_curve_path)
-            plt.close()
-            wandb.log({f"{phase}/roc_curve": wandb.Image(roc_curve_path)})
-            '''
-
-            # 데이터 개수
-            num_normal = np.sum(all_labels == 1)
-            num_fraud  = np.sum(all_labels == 0)
+            # Log the number of Normal and Fraud samples
+            num_normal = np.sum(all_labels == 0)
+            num_fraud = np.sum(all_labels == 1)
             wandb.log({
                 f"{phase}/num_normal": int(num_normal),
                 f"{phase}/num_fraud": int(num_fraud)
             })
+        
+        #return avg_val_loss
 
-
+    # Calculate total training steps for progress bar
     total_steps = len(train_loader) * args.epochs
     pbar = tqdm(total=total_steps, desc="Training Steps", disable=not accelerator.is_main_process)
 
     for epoch in range(1, args.epochs + 1):
+        # Train for one epoch
         train_loss = train_one_epoch(train_loader, epoch, pbar)
 
-        # 여기서는 val_loss를 triplet 관점에서 계산하는 예시(선택)
-        # 굳이 normal-only valid set이 있다면 아래처럼 가능 (생략 가능)
-        val_loss = train_loss  # 임시
+        # Placeholder for validation loss (if triplet loss on validation set is needed)
 
         if (epoch % args.eval_epoch) == 0:
-            # Normal+Fraud 통합 평가
+            # Perform evaluation on the validation set
             evaluate_balanced(val_loader, phase="val")
-            # 원한다면 test도 epoch마다 돌릴 수 있음
+            # Optionally, evaluate on the test set each epoch
             # evaluate_balanced(test_loader, phase="test")
 
             if accelerator.is_main_process:
+                # Log epoch-level metrics
                 wandb.log({
                     "epoch": epoch,
                     "train_loss": train_loss,
-                    "val_loss": val_loss,
+                    #"val_loss": val_loss,
                 })
         else:
             if accelerator.is_main_process:
+                # Log epoch-level metrics even if not evaluating
                 wandb.log({
                     "epoch": epoch,
                     "train_loss": train_loss,
-                    "val_loss": val_loss,
+                    #"val_loss": val_loss,
                 })
 
-        # Checkpoint
+        # Save model checkpoints at specified epochs
         if (epoch % args.save_epoch) == 0 and accelerator.is_main_process:
             ckpt_path = os.path.join(args.output_dir, f"checkpoint_epoch_{epoch}.pt")
             torch.save({
@@ -581,6 +650,7 @@ def main():
             print(f"Saved checkpoint to {ckpt_path}")
 
     if accelerator.is_main_process:
+        # Close the progress bar and finish the W&B run
         pbar.close()
         wandb.finish()
 

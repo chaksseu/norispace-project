@@ -1,18 +1,28 @@
 #!/bin/bash
 
 ################################################################################
-# 파라미터 설정
+# Parameter Configuration
 ################################################################################
-YOLO_MODEL_PATH="Noris_YOLO.pt"       # YOLO 모델(.pt) 경로
 
-# normal 또는 fraud
+# Path to the YOLO model file
+YOLO_MODEL_PATH="Noris_YOLO.pt"       # Path to the YOLO model (.pt file)
+
+# Specify the label type: either "normal" or "fraud"
 LABEL="fraud"
-# 원본 데이터 폴더 (예: "dataset/normal" 또는 "dataset/fraud")
-INPUT_DIR="dataset/$LABEL"
-# 결과물이 저장될 폴더 (anchor, pos, neg 이미지 + CSV)
-PROCESSED_DIR="processed_dataset_$LABEL"
 
-# LABEL에 따라 train, val, test 비율 설정
+# Input and output directories based on the LABEL
+INPUT_DIR="dataset/$LABEL"             # Original data folder (e.g., "dataset/normal" or "dataset/fraud")
+PROCESSED_DIR="processed_dataset_no_ocr_neg32_$LABEL"  # Directory to save processed data (anchor, pos, neg images + CSV)
+
+# Preprocessing hyperparameters
+BATCH_SIZE=32
+MARGIN=50
+NEGATIVE_PER_IMAGE=32
+NUM_WORKERS=8
+CUDA_DEVICE=1
+
+
+# Set train, validation, and test ratios based on the LABEL
 if [ "$LABEL" == "normal" ]; then
   TRAIN_RATIO=0.8
   VAL_RATIO=0.1
@@ -26,17 +36,16 @@ else
   exit 1
 fi
 
-BATCH_SIZE=32
-MARGIN=50
-NEGATIVE_PER_IMAGE=8
-NUM_WORKERS=4
 
 
+# Seed for reproducibility
 SPLIT_SEED=42
 
+
 ################################################################################
-# 파이썬 스크립트 실행
+# Execute Preprocessing Script
 ################################################################################
+
 python src/data_preprocess.py \
   --yolo_model_path "${YOLO_MODEL_PATH}" \
   --input_dir "${INPUT_DIR}" \
@@ -50,4 +59,5 @@ python src/data_preprocess.py \
   --val_ratio "${VAL_RATIO}" \
   --test_ratio "${TEST_RATIO}" \
   --generate_negatives \
-  --label "${LABEL}"
+  --label "${LABEL}" \
+  --cuda_device "${CUDA_DEVICE}"  # 추가된 부분
