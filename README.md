@@ -16,11 +16,6 @@ The **Norispace Project** is a pipeline designed for detecting and classifying n
   - [2. Setup Text Image Pool](#2-setup-text-image-pool)
   - [3. Data Preprocessing](#3-data-preprocessing)
   - [4. Training the Model](#4-training-the-model)
-- [Scripts and Components](#scripts-and-components)
-  - [Preprocessing Scripts](#preprocessing-scripts)
-  - [Training Scripts](#training-scripts)
-- [Configuration](#configuration)
-- [Notes](#notes)
 - [Contributing](#contributing)
 - [License](#license)
 
