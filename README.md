@@ -121,3 +121,12 @@ Train the ConvNeXt-Small model using the preprocessed data.
 ```bash
 bash scripts/run_training.sh
 ```
+
+## Contributing
+
+- 작성중
+
+## License
+
+- 작성중
+
