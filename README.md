@@ -1,4 +1,4 @@
-# Norispace Project
+# [MIIL] Norispace Project
 
 ## Overview
 
@@ -119,9 +119,9 @@ bash scripts/run_training.sh
 
 ## Contributing
 
-- 작성중
+- 추후 작성
 
 ## License
 
-- 작성중
+- 추후 작성
 

@@ -22,6 +22,7 @@ NUM_WORKERS=4
 CUDA_DEVICE=0
 
 # (Optional) Directory containing text images for augmentation
+# Only need for augmented_ocr
 TEXT_IMAGE_DIR="text_images_pool"  
 
 # Train, validation, and test ratio configuration based on LABEL

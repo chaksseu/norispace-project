@@ -1,0 +1,12 @@
+wandb: Currently logged in as: rtrt505 (norispace-project). Use `wandb login --relogin` to force relogin
+wandb: Using wandb-core as the SDK backend.  Please refer to https://wandb.me/wandb-core for more information.
+wandb: Tracking run with wandb version 0.19.2
+wandb: Run data is saved locally in /workspace/norispace-project/wandb/run-20250113_132816-02wqrjge
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run 0113_no_ocr
+wandb: ⭐️ View project at https://wandb.ai/norispace-project/0113_norispace_project
+wandb: 🚀 View run at https://wandb.ai/norispace-project/0113_norispace_project/runs/02wqrjge
+[ANPTrainDataset] Found 625 training samples in processed_dataset_no_ocr_neg32_normal/train
+[MixedValTestDataset-val] Normal+Fraud => 156 samples
+[MixedValTestDataset-test] Normal+Fraud => 158 samples
+Training Steps:   0%|          | 0/3000 [00:00<?, ?it/s]Training Steps:   0%|          | 1/3000 [00:05<4:39:35,  5.59s/it]Training Steps:   0%|          | 1/3000 [00:05<4:39:35,  5.59s/it, loss=0.463]Training Steps:   0%|          | 2/3000 [00:07<2:55:08,  3.51s/it, loss=0.463]Training Steps:   0%|          | 2/3000 [00:07<2:55:08,  3.51s/it, loss=0.382]Training Steps:   0%|          | 3/3000 [00:14<4:01:34,  4.84s/it, loss=0.382]Training Steps:   0%|          | 3/3000 [00:14<4:01:34,  4.84s/it, loss=0.325]Training Steps:   0%|          | 4/3000 [00:16<3:08:00,  3.77s/it, loss=0.325]Training Steps:   0%|          | 4/3000 [00:16<3:08:00,  3.77s/it, loss=0.313]Training Steps:   0%|          | 5/3000 [00:22<3:50:49,  4.62s/it, loss=0.313]Training Steps:   0%|          | 5/3000 [00:22<3:50:49,  4.62s/it, loss=0.287]Training Steps:   0%|          | 6/3000 [00:24<3:09:24,  3.80s/it, loss=0.287]Training Steps:   0%|          | 6/3000 [00:24<3:09:24,  3.80s/it, loss=0.281]Training Steps:   0%|          | 7/3000 [00:30<3:48:10,  4.57s/it, loss=0.281]Training Steps:   0%|          | 7/3000 [00:30<3:48:10,  4.57s/it, loss=0.285]Training Steps:   0%|          | 8/3000 [00:32<3:09:48,  3.81s/it, loss=0.285]Training Steps:   0%|          | 8/3000 [00:32<3:09:48,  3.81s/it, loss=0.273]
