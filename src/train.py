@@ -640,7 +640,7 @@ def main():
 
         # Save model checkpoints at specified epochs
         if (epoch % args.save_epoch) == 0 and accelerator.is_main_process:
-            ckpt_path = os.path.join(args.output_dir, f"checkpoint_epoch_{epoch}.pt")
+            ckpt_path = os.path.join(args.output_dir, f"{args.wandb_run_name}_checkpoint_epoch_{epoch}.pt")
             torch.save({
                 'epoch': epoch,
                 'anchor_model_state': anchor_model.state_dict(),
