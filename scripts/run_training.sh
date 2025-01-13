@@ -11,7 +11,7 @@ OUTPUT_DIR="./checkpoints"                   # Directory to save model checkpoin
 
 # Weights & Biases (W&B) project configuration
 WANDB_PROJECT_NAME="0113_norispace_project"
-WANDB_RUN_NAME="0113_ocr"
+WANDB_RUN_NAME="0113_augmented_ocr"
 
 # Training hyperparameters
 BATCH_SIZE=64
