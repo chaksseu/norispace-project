@@ -59,7 +59,7 @@ def parse_args():
 
     # Weights & Biases configuration
     parser.add_argument("--wandb_project", type=str, default="contrastive_learning")
-    parser.add_argument("--wandb_entity", type=str, default=None)
+    parser.add_argument("--wandb_entity", type=str, default="norispace-project")
     parser.add_argument("--wandb_run_name", type=str, default=None)
 
     return parser.parse_args()

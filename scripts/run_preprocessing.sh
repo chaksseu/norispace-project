@@ -5,24 +5,26 @@
 ################################################################################
 
 # Path to the YOLO model file
-YOLO_MODEL_PATH="Noris_YOLO.pt"       # Path to the YOLO model (.pt file)
+YOLO_MODEL_PATH="Noris_YOLO.pt"  # Example YOLO model file path
 
 # Specify the label type: either "normal" or "fraud"
-LABEL="fraud"
+LABEL="normal"
 
-# Input and output directories based on the LABEL
-INPUT_DIR="dataset/$LABEL"             # Original data folder (e.g., "dataset/normal" or "dataset/fraud")
-PROCESSED_DIR="processed_dataset_no_ocr_neg32_$LABEL"  # Directory to save processed data (anchor, pos, neg images + CSV)
+# Input and output directories
+INPUT_DIR="dataset/$LABEL"  
+PROCESSED_DIR="processed_dataset_augmented_ocr_neg32_$LABEL"  
 
 # Preprocessing hyperparameters
-BATCH_SIZE=32
+BATCH_SIZE=16
 MARGIN=50
 NEGATIVE_PER_IMAGE=32
-NUM_WORKERS=8
-CUDA_DEVICE=1
+NUM_WORKERS=4
+CUDA_DEVICE=0
 
+# (Optional) Directory containing text images for augmentation
+TEXT_IMAGE_DIR="text_images_pool"  
 
-# Set train, validation, and test ratios based on the LABEL
+# Train, validation, and test ratio configuration based on LABEL
 if [ "$LABEL" == "normal" ]; then
   TRAIN_RATIO=0.8
   VAL_RATIO=0.1
@@ -36,11 +38,10 @@ else
   exit 1
 fi
 
-
-
 # Seed for reproducibility
 SPLIT_SEED=42
 
+# Make sure this directory exists and contains your prepared text images
 
 ################################################################################
 # Execute Preprocessing Script
@@ -60,4 +61,5 @@ python src/data_preprocess.py \
   --test_ratio "${TEST_RATIO}" \
   --generate_negatives \
   --label "${LABEL}" \
-  --cuda_device "${CUDA_DEVICE}"  # 추가된 부분
+  --cuda_device "${CUDA_DEVICE}" \
+  --text_image_dir "${TEXT_IMAGE_DIR}"
