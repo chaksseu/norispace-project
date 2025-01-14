@@ -1,15 +1,12 @@
 #!/bin/bash
 
-# 필요시 실행 전에 실행 권한 추가
-# chmod +x run_inference_pipeline.sh
-
 # 사용자 정의 변수 설정
-CHECKPOINT_PATH="./checkpoint_epoch_200.pt"
+CHECKPOINT_PATH="./0113_augmented_ocr_checkpoint_epoch_300.pt"
 INPUT_DIR="./eval_data/data"
 PROCESSED_DIR="./eval_data/processed"
 OUTPUT_DIR="./eval_data/eval_results"
-YOLO_MODEL_PATH="./YOLO_best.pt"
-THRESHOLD=0.2
+YOLO_MODEL_PATH="./Noris_YOLO.pt"
+THRESHOLD=0.13256672024726868
 DEVICE="cuda"
 BATCH_SIZE=32
 MODE="last_processed"

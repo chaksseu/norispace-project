@@ -528,12 +528,12 @@ def main():
             })
 
         # Initialize lists to store metrics for each threshold
-        thresholds = np.linspace(0.0, 0.3, 30)  # 50 thresholds ranging from 0.0 to 0.5
+        thresholds = np.linspace(0.0, 0.3, 30)  # 40 thresholds ranging from 0.0 to 0.4
         thr_metrics = []
         precisions = []
         recalls = []
 
-        
+        '''
         for th in thresholds:
             # Generate predictions based on the current threshold
             # distance <= th => normal (0), distance > th => fraud (1)
@@ -571,30 +571,22 @@ def main():
         paired = sorted(zip(recalls, precisions), key=lambda x: x[0])
         sorted_recalls = [p[0] for p in paired]
         sorted_precisions = [p[1] for p in paired]
+        '''
+        fpr, tpr, thresholds = roc_curve(all_labels, all_distances)
+        roc_auc = auc(fpr, tpr)
+        roc_auc = roc_auc_score(all_labels, all_distances)
 
-        # Compute Area Under the PR Curve as Average Precision
-        pr_auc_value = auc(sorted_recalls, sorted_precisions)
-        avg_precision = average_precision_score(all_labels, -all_distances)  # Using -distance as score
+
+        precision, recall, _ = precision_recall_curve(y_true, y_score)
+        pr_auc = auc(recall, precision)
+        avg_precision = average_precision_score(all_labels, all_distances) 
+
 
         if accelerator.is_main_process:
             # Log Average Precision
+            wandb.log({f"{phase}/roc_auc_value": roc_auc_value})
             wandb.log({f"{phase}/pr_auc_value": pr_auc_value})
             wandb.log({f"{phase}/avg_precision": avg_precision})
-
-            # Plot and log the PR Curve
-            plt.figure(figsize=(8, 6))
-            plt.step(sorted_recalls, sorted_precisions, where='post',
-                     label=f'AP={avg_precision}, PR AUC={pr_auc_value:.3f}')
-            plt.fill_between(sorted_recalls, sorted_precisions, step='post', alpha=0.2)
-            plt.xlabel('Recall')
-            plt.ylabel('Precision')
-            plt.title(f'{phase.capitalize()} PR Curve')
-            plt.grid(True)
-            plt.legend(loc='upper right')
-            pr_curve_path = os.path.join(args.output_dir, f"{phase}_precision_recall_curve.png")
-            plt.savefig(pr_curve_path)
-            plt.close()
-            wandb.log({f"{phase}/precision_recall_curve": wandb.Image(pr_curve_path)})
 
             # Log the number of Normal and Fraud samples
             num_normal = np.sum(all_labels == 0)
@@ -604,7 +596,6 @@ def main():
                 f"{phase}/num_fraud": int(num_fraud)
             })
         
-        #return avg_val_loss
 
     # Calculate total training steps for progress bar
     total_steps = len(train_loader) * args.epochs

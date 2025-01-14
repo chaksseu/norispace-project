@@ -34,13 +34,17 @@ def get_model(pretrained=True):
     model.classifier[2] = nn.Identity()
     return model
 
-def preprocess_with_yolo(yolo_model_path, input_dir, processed_dir, batch_size=64):
+def preprocess_with_yolo(yolo_model_path, input_dir, processed_dir, device, batch_size=64):
     """
     YOLO를 이용해 input_dir 내 이미지에 대해 bounding box 검출.
     결과를 processed_dir/results.csv 에 저장.
     각 category(또는 input_dir basename)별로 excluded/cropped 이미지 생성.
     """
+    device = torch.device(device if torch.cuda.is_available() else "cpu")
+
     model = YOLO(yolo_model_path)
+    model.to(device)
+    
     os.makedirs(processed_dir, exist_ok=True)
     csv_data = []
 
@@ -326,7 +330,7 @@ def main():
     args = parse_args()
 
     # 1. YOLO 전처리
-    preprocess_with_yolo(args.yolo_model_path, args.input_dir, args.processed_dir, batch_size=args.batch_size)
+    preprocess_with_yolo(args.yolo_model_path, args.input_dir, args.processed_dir, args.device, batch_size=args.batch_size)
 
     # 2. anchor/img 생성
     results_csv = os.path.join(args.processed_dir, "results.csv")
