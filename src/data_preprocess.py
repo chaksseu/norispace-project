@@ -214,7 +214,7 @@ def random_jitter(image: Image.Image, use_ocr=True) -> Image.Image:
         cv_img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
         if use_ocr:
-            reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+            reader = easyocr.Reader(['en'], gpu=False)
             results = reader.readtext(cv_img, detail=1)  # returns [(bbox, text, conf), ...]
 
             for detection in results:

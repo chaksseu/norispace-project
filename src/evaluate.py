@@ -160,7 +160,8 @@ def evaluate_model(model_checkpoint, args, transform):
     )
 
     # Define datasets and loaders
-    for phase in ["val", "test"]:
+    #for phase in ["val", "test"]:
+    for phase in ["test"]:
         dataset = MixedValTestDataset(
             args.normal_data_dir, args.fraud_data_dir, mode=phase, transform=transform
         )

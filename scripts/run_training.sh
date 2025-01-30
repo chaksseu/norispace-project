@@ -5,26 +5,29 @@
 ###############################################################################
 
 # Directory paths for datasets
-NORMAL_DATA_DIR="processed_dataset_augmented_ocr_neg32_normal"   # Root directory for Normal dataset (train/val/test)
-FRAUD_DATA_DIR="processed_dataset_augmented_ocr_neg32_fraud"     # Root directory for Fraud dataset (val/test)
+NORMAL_DATA_DIR="processed_dataset_augmented_ocr_neg32_normal_no_val_0130"   # Root directory for Normal dataset (train/val/test)
+
+FRAUD_DATA_DIR="processed_dataset_augmented_ocr_neg32_fraud_no_val_0130"     # Root directory for Fraud dataset (val/test)
 OUTPUT_DIR="./checkpoints"                   # Directory to save model checkpoints
 
 # Weights & Biases (W&B) project configuration
-WANDB_PROJECT_NAME="0113_norispace_project"
-WANDB_RUN_NAME="0113_augmented_ocr"
+WANDB_PROJECT_NAME="0130_norispace_project"
+WANDB_RUN_NAME="0130_augmented_ocr"
 
 # Training hyperparameters
 BATCH_SIZE=64
 GRADIENT_ACCUMULATION_STEPS=4
 LR=1e-5
-EPOCHS=300
-EVAL_EPOCH=4
+EPOCHS=400
+EVAL_EPOCH=1000
 SAVE_EPOCH=20
 NUM_WORKERS=4
 MIXED_PRECISION="fp16"
 
 # Flag to use pretrained ConvNeXt-Small model
 PRETRAINED="--pretrained"
+
+# gpu number is in accelerate config
 
 ###############################################################################
 # Execute Training Script

@@ -11,10 +11,10 @@ set -e
 DOWNLOAD_FONT_SCRIPT="scripts/download_fonts.sh"
 CREATE_TEXT_POOL_SCRIPT="src/create_text_pool.py"
 FONTS_DIR="fonts"
-TEXT_IMAGES_POOL_DIR="text_images_pool"
+TEXT_IMAGES_POOL_DIR="text_images_pool_0130"
 INPUT_IMAGES_DIR="dataset/normal"  # Update as per your dataset
 YOLO_MODEL_PATH="Noris_YOLO.pt"   # Update with your YOLO model path
-CUDA_DEVICE=0
+CUDA_DEVICE=1
 
 # Step 1: Download Fonts
 echo "=== Step 1: Downloading Fonts ==="

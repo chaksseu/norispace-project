@@ -226,7 +226,7 @@ def yolo_and_ocr_crops(input_dir, output_dir,
 
     # Prepare EasyOCR
     try:
-        reader = easyocr.Reader(ocr_lang_list, gpu=(device.startswith("cuda")))
+        reader = easyocr.Reader(ocr_lang_list, gpu=False)
         logging.info(f"Initialized EasyOCR with languages: {ocr_lang_list}")
     except Exception as e:
         logging.error(f"Failed to initialize EasyOCR: {e}")

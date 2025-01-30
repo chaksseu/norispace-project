@@ -527,11 +527,11 @@ def main():
                 f"{phase}/avg_distance_fraud": avg_distance_fraud,
             })
 
-        # Initialize lists to store metrics for each threshold
-        thresholds = np.linspace(0.0, 0.3, 30)  # 40 thresholds ranging from 0.0 to 0.4
-        thr_metrics = []
-        precisions = []
-        recalls = []
+        # # Initialize lists to store metrics for each threshold
+        # thresholds = np.linspace(0.0, 0.3, 30)  # 40 thresholds ranging from 0.0 to 0.4
+        # thr_metrics = []
+        # precisions = []
+        # recalls = []
 
         '''
         for th in thresholds:
