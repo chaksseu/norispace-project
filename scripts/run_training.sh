@@ -5,14 +5,14 @@
 ###############################################################################
 
 # Directory paths for datasets
-NORMAL_DATA_DIR="processed_dataset_augmented_ocr_neg32_normal_no_val_0130"   # Root directory for Normal dataset (train/val/test)
+NORMAL_DATA_DIR="processed_dataset_augmented_ocr_neg32_normal_no_val_modified_augmentation_0131"   # Root directory for Normal dataset (train/val/test)
 
 FRAUD_DATA_DIR="processed_dataset_augmented_ocr_neg32_fraud_no_val_0130"     # Root directory for Fraud dataset (val/test)
-CHEKCPOINTS_DIR="./checkpoints_0131_test"                   # Directory to save model checkpoints
+CHEKCPOINTS_DIR="./checkpoints_0131_no_val_modified_augmentation"                   # Directory to save model checkpoints
 
 # Weights & Biases (W&B) project configuration
 WANDB_PROJECT_NAME="0131_norispace_project"
-WANDB_RUN_NAME="0131_augmented_ocr_no_val"
+WANDB_RUN_NAME="0131_augmented_ocr_no_val_modified_augmentation"
 
 # Training hyperparameters
 BATCH_SIZE=64
