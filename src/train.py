@@ -19,14 +19,16 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
     average_precision_score,
     auc,
-    accuracy_score
+    accuracy_score,
+    roc_curve,
+    roc_auc_score,
+    precision_recall_curve
 )
 from sklearn.exceptions import UndefinedMetricWarning
 
 import matplotlib.pyplot as plt
 import wandb
 from PIL import Image
-
 
 def parse_args():
     """
@@ -52,7 +54,6 @@ def parse_args():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--mixed_precision", type=str, default="no")
 
-
     # Model configuration
     parser.add_argument("--pretrained", action="store_true",
                         help="Use pretrained ConvNeXt-Small model")
@@ -63,7 +64,6 @@ def parse_args():
     parser.add_argument("--wandb_run_name", type=str, default=None)
 
     return parser.parse_args()
-
 
 ###############################################################################
 # 1) ANPTrainDataset: (train) Normal-only, Triplet (anchor, pos, neg)
@@ -149,7 +149,6 @@ class ANPTrainDataset(Dataset):
             img = self.transform(img)
         return img
 
-
 ###############################################################################
 # 2) MixedValTestDataset: (val, test) => Normal + Fraud
 #    => anchor-pos pairs, labels: normal=0, fraud=1
@@ -234,7 +233,6 @@ class MixedValTestDataset(Dataset):
             "label": label  # normal=0, fraud=1
         }
 
-
 ###############################################################################
 # Triplet 
 ###############################################################################
@@ -258,7 +256,6 @@ class TripletLoss(nn.Module):
         pos_loss = 0.5 * (pos_dist ** 2)
         neg_loss = 0.5 * torch.clamp(self.margin - neg_dist, min=0.0) ** 2
         return pos_loss.mean() + neg_loss.mean()
-
 
 def main():
     """
@@ -412,7 +409,7 @@ def main():
     #---------------------------------------------------------------------------
     # Training Loop
     #---------------------------------------------------------------------------
-    def train_one_epoch(loader, epoch, pbar):
+    def train_one_epoch(loader, epoch):
         """
         Trains the model for one epoch using triplet loss.
         """
@@ -450,8 +447,8 @@ def main():
                 if accelerator.is_main_process:
                     global_step += 1
                     wandb.log({"train_step_loss": loss.item() * args.gradient_accumulation_steps})
-                    pbar.update(1)
-                    pbar.set_postfix(loss=loss.item() * args.gradient_accumulation_steps)
+                    # pbar.update(1)  # 제거
+                    # pbar.set_postfix(loss=loss.item() * args.gradient_accumulation_steps)  # 제거
 
         avg_loss = total_loss / total_samples if total_samples else 0.0
         return avg_loss
@@ -470,7 +467,6 @@ def main():
 
         all_distances = []
         all_labels = []
-        
 
         total_val_loss = 0.0
         total_val_samples = 0
@@ -487,16 +483,6 @@ def main():
                 anc_emb = nn.functional.normalize(anc_emb, p=2, dim=1)
                 img_emb = nn.functional.normalize(img_emb, p=2, dim=1)
 
-
-
-
-                #val_loss = criterion(anc_emb, pos_emb, neg_emb)
-                #bs = anc.size(0)
-                #total_val_loss += (val_loss.item() * bs)
-                #total_val_samples += bs
-
-
-
                 # Compute pairwise distances
                 dist = torch.nn.functional.pairwise_distance(anc_emb, img_emb)
                 dist = dist.cpu().numpy()
@@ -507,15 +493,11 @@ def main():
         all_distances = np.array(all_distances)
         all_labels = np.array(all_labels)
 
-
-        #avg_val_loss = total_val_loss / total_val_samples if total_val_samples else 0.0
-
         # Skip evaluation if only one class is present
         if len(np.unique(all_labels)) < 2:
             if accelerator.is_main_process:
                 wandb.log({f"{phase}/info": "Only one class present, metrics undefined."})
             return
-
 
         # Calculate average distances for each class
         avg_distance_normal = np.mean(all_distances[all_labels == 0])
@@ -527,65 +509,17 @@ def main():
                 f"{phase}/avg_distance_fraud": avg_distance_fraud,
             })
 
-        # # Initialize lists to store metrics for each threshold
-        # thresholds = np.linspace(0.0, 0.3, 30)  # 40 thresholds ranging from 0.0 to 0.4
-        # thr_metrics = []
-        # precisions = []
-        # recalls = []
-
-        '''
-        for th in thresholds:
-            # Generate predictions based on the current threshold
-            # distance <= th => normal (0), distance > th => fraud (1)
-            preds = np.where(all_distances <= th, 0, 1)
-
-            # Compute precision, recall, F1-score
-            precision, recall, f1, _ = precision_recall_fscore_support(
-                all_labels, preds, average='binary', zero_division=0
-            )
-
-            # Compute accuracy
-            acc = accuracy_score(all_labels, preds)
-
-            # Store the metrics
-            thr_metrics.append({
-                "threshold": th,
-                "precision": precision,
-                "recall": recall,
-                "f1_score": f1,
-                "accuracy": acc
-            })
-            precisions.append(precision)
-            recalls.append(recall)
-
-            # Log metrics for each threshold directly to W&B
-            if accelerator.is_main_process:
-                wandb.log({
-                    #f"{phase}/precision_threshold_{th:.2f}": precision,
-                    #f"{phase}/recall_threshold_{th:.2f}": recall,
-                    f"{phase}/f1_score_threshold_{th:.2f}": f1,
-                    f"{phase}/accuracy_threshold_{th:.2f}": acc
-                })
-
-        # Sort the (recall, precision) pairs based on recall for AP calculation
-        paired = sorted(zip(recalls, precisions), key=lambda x: x[0])
-        sorted_recalls = [p[0] for p in paired]
-        sorted_precisions = [p[1] for p in paired]
-        '''
         fpr, tpr, thresholds = roc_curve(all_labels, all_distances)
-        roc_auc = auc(fpr, tpr)
         roc_auc = roc_auc_score(all_labels, all_distances)
 
-
-        precision, recall, _ = precision_recall_curve(y_true, y_score)
+        precision, recall, _ = precision_recall_curve(all_labels, all_distances)
         pr_auc = auc(recall, precision)
         avg_precision = average_precision_score(all_labels, all_distances) 
 
-
         if accelerator.is_main_process:
-            # Log Average Precision
-            wandb.log({f"{phase}/roc_auc_value": roc_auc_value})
-            wandb.log({f"{phase}/pr_auc_value": pr_auc_value})
+            # Log Average Precision and ROC AUC
+            wandb.log({f"{phase}/roc_auc_value": roc_auc})
+            wandb.log({f"{phase}/pr_auc_value": pr_auc})
             wandb.log({f"{phase}/avg_precision": avg_precision})
 
             # Log the number of Normal and Fraud samples
@@ -595,23 +529,20 @@ def main():
                 f"{phase}/num_normal": int(num_normal),
                 f"{phase}/num_fraud": int(num_fraud)
             })
-        
 
-    # Calculate total training steps for progress bar
-    total_steps = len(train_loader) * args.epochs
-    pbar = tqdm(total=total_steps, desc="Training Steps", disable=not accelerator.is_main_process)
+    #---------------------------------------------------------------------------
+    # 에폭 단위로 tqdm 초기화
+    #---------------------------------------------------------------------------
+    pbar = tqdm(total=args.epochs, desc="Epochs", disable=not accelerator.is_main_process)
 
     for epoch in range(1, args.epochs + 1):
         # Train for one epoch
-        train_loss = train_one_epoch(train_loader, epoch, pbar)
+        train_loss = train_one_epoch(train_loader, epoch)
 
-        # Placeholder for validation loss (if triplet loss on validation set is needed)
-
+        # Perform evaluation if required
         if (epoch % args.eval_epoch) == 0:
             # Perform evaluation on the validation set
             evaluate_balanced(val_loader, phase="val")
-            # Optionally, evaluate on the test set each epoch
-            # evaluate_balanced(test_loader, phase="test")
 
             if accelerator.is_main_process:
                 # Log epoch-level metrics
@@ -640,11 +571,13 @@ def main():
             }, ckpt_path)
             print(f"Saved checkpoint to {ckpt_path}")
 
+        # 에폭이 끝날 때마다 pbar 업데이트
+        pbar.update(1)
+
     if accelerator.is_main_process:
         # Close the progress bar and finish the W&B run
         pbar.close()
         wandb.finish()
-
 
 if __name__ == "__main__":
     main()

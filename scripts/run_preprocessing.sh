@@ -8,22 +8,21 @@
 YOLO_MODEL_PATH="Noris_YOLO.pt"  # Example YOLO model file path
 
 # Specify the label type: either "normal" or "fraud"
-LABEL="fraud"
+LABEL="normal"
 
 # Input and output directories
 INPUT_DIR="dataset/$LABEL"  
-PROCESSED_DIR="processed_dataset_augmented_ocr_neg32_${LABEL}_no_val_0130"  
+PROCESSED_DIR="processed_dataset_augmented_ocr_neg32_${LABEL}_no_val_modified_augmentation_0131"  
 
 # Preprocessing hyperparameters
 BATCH_SIZE=16
 MARGIN=50
 NEGATIVE_PER_IMAGE=32
 NUM_WORKERS=4
-CUDA_DEVICE=3
+CUDA_DEVICE=0
 
-# (Optional) Directory containing text images for augmentation
 # Only need for augmented_ocr
-TEXT_IMAGE_DIR="text_images_pool"  
+TEXT_IMAGE_DIR="text_images_pool_0130"  
 
 # Train, validation, and test ratio configuration based on LABEL
 if [ "$LABEL" == "normal" ]; then

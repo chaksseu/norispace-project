@@ -8,11 +8,11 @@
 NORMAL_DATA_DIR="processed_dataset_augmented_ocr_neg32_normal_no_val_0130"   # Root directory for Normal dataset (train/val/test)
 
 FRAUD_DATA_DIR="processed_dataset_augmented_ocr_neg32_fraud_no_val_0130"     # Root directory for Fraud dataset (val/test)
-OUTPUT_DIR="./checkpoints"                   # Directory to save model checkpoints
+CHEKCPOINTS_DIR="./checkpoints_0131_test"                   # Directory to save model checkpoints
 
 # Weights & Biases (W&B) project configuration
-WANDB_PROJECT_NAME="0130_norispace_project"
-WANDB_RUN_NAME="0130_augmented_ocr"
+WANDB_PROJECT_NAME="0131_norispace_project"
+WANDB_RUN_NAME="0131_augmented_ocr_no_val"
 
 # Training hyperparameters
 BATCH_SIZE=64
@@ -36,7 +36,7 @@ PRETRAINED="--pretrained"
 accelerate launch src/train.py \
   --normal_data_dir "${NORMAL_DATA_DIR}" \
   --fraud_data_dir "${FRAUD_DATA_DIR}" \
-  --output_dir "${OUTPUT_DIR}" \
+  --output_dir "${CHEKCPOINTS_DIR}" \
   --batch_size "${BATCH_SIZE}" \
   --lr "${LR}" \
   --epochs "${EPOCHS}" \

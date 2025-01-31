@@ -38,8 +38,6 @@ def parse_args():
                         help="Path to the Fraud dataset root (same structure as normal_data_dir)")
     parser.add_argument("--model_dir", type=str, required=True,
                         help="Directory containing saved model checkpoints")
-    parser.add_argument("--output_dir", type=str, default="./evaluation_results",
-                        help="Directory to save evaluation results")
 
     # Evaluation parameters
     parser.add_argument("--batch_size", type=int, default=16)
@@ -196,6 +194,17 @@ def collate_fn_eval(batch):
         labels.append(b["label"])
     return torch.stack(anchors), torch.stack(poss), torch.tensor(labels, dtype=torch.long)
 
+
+def remove_module_prefix(state_dict):
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        if key.startswith("module."):
+            new_key = key[len("module."):]
+        else:
+            new_key = key
+        new_state_dict[new_key] = value
+    return new_state_dict
+
 def perform_evaluation(model_checkpoint, loader, device):
     """
     Loads the model from the checkpoint and computes distances between anchor and positive embeddings.
@@ -208,9 +217,19 @@ def perform_evaluation(model_checkpoint, loader, device):
     anchor_model = get_model(pretrained=False).to(device)
     posneg_model = get_model(pretrained=False).to(device)
     
-    # Load state dicts
-    anchor_model.load_state_dict(checkpoint['anchor_model_state'])
-    posneg_model.load_state_dict(checkpoint['posneg_model_state'])
+
+    # 'anchor_model_state'의 키에서 'module.' 제거 (acclerate(ddp)로 저장했을 경우)
+    anc_state_dict = checkpoint['anchor_model_state']
+    anc_state_dict = remove_module_prefix(anc_state_dict)
+    anchor_model.load_state_dict(anc_state_dict)
+
+    posneg_state_dict = checkpoint['posneg_model_state']
+    posneg_state_dict = remove_module_prefix(posneg_state_dict)
+    posneg_model.load_state_dict(posneg_state_dict)
+
+    # # Load state dicts (gpu 하나도 저장했을 경우)
+    # anchor_model.load_state_dict(checkpoint['anchor_model_state'])
+    # posneg_model.load_state_dict(checkpoint['posneg_model_state'])
     
     # Set models to evaluation mode
     anchor_model.eval()
@@ -307,9 +326,6 @@ def main():
         entity=args.wandb_entity,
         job_type="evaluation"
     )
-
-    # Create the output directory if it doesn't exist
-    os.makedirs(args.output_dir, exist_ok=True)
 
     # Define transformations using pretrained ConvNeXt-Small weights
     weights = ConvNeXt_Small_Weights.IMAGENET1K_V1

@@ -42,6 +42,9 @@ from tqdm import tqdm
 # ------------------------------------------------------------------------------
 text_images_pool = []
 
+
+
+
 def load_text_image_pool(folder_path: str):
     """
     Loads all images from the specified folder_path into 'text_images_pool'.
@@ -199,7 +202,7 @@ def preprocess_with_yolo(yolo_model_path, input_dir, processed_dir,
 # ------------------------------------------------------------------------------
 # [2] OCR-based Augmentation -> anchor/pos/neg
 # ------------------------------------------------------------------------------
-def random_jitter(image: Image.Image, use_ocr=True) -> Image.Image:
+def random_jitter(image: Image.Image, use_ocr=True, text_image_dir="text_image_dir") -> Image.Image:
     """
     Applies random augmentation to 'image':
     1) OCR detection on text regions
@@ -214,7 +217,7 @@ def random_jitter(image: Image.Image, use_ocr=True) -> Image.Image:
         cv_img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
         if use_ocr:
-            reader = easyocr.Reader(['en'], gpu=False)
+            reader = easyocr.Reader(['en'], gpu=True)
             results = reader.readtext(cv_img, detail=1)  # returns [(bbox, text, conf), ...]
 
             for detection in results:
@@ -236,7 +239,7 @@ def random_jitter(image: Image.Image, use_ocr=True) -> Image.Image:
                 region_w = x_max - x_min
                 region_h = y_max - y_min
 
-                text_images_pool = load_text_image_pool("text_images_pool")
+                text_images_pool = load_text_image_pool(text_image_dir)
 
                 # Decide whether to use a text image from the pool or to distort the original
                 
@@ -261,16 +264,16 @@ def random_jitter(image: Image.Image, use_ocr=True) -> Image.Image:
                     crop_region = augmented.crop((x_min, y_min, x_max, y_max))
 
                     # Random color/brightness/contrast/sharpness
-                    if random.random() < 0.7:
+                    if random.random() < 0.8:
                         factor = random.uniform(0.8, 1.2)
                         crop_region = ImageEnhance.Color(crop_region).enhance(factor)
-                    if random.random() < 0.7:
+                    if random.random() < 0.8:
                         factor = random.uniform(0.8, 1.2)
                         crop_region = ImageEnhance.Brightness(crop_region).enhance(factor)
-                    if random.random() < 0.7:
+                    if random.random() < 0.8:
                         factor = random.uniform(0.8, 1.2)
                         crop_region = ImageEnhance.Contrast(crop_region).enhance(factor)
-                    if random.random() < 0.7:
+                    if random.random() < 0.8:
                         factor = random.uniform(0.8, 1.2)
                         crop_region = ImageEnhance.Sharpness(crop_region).enhance(factor)
 
@@ -280,7 +283,7 @@ def random_jitter(image: Image.Image, use_ocr=True) -> Image.Image:
                         crop_region = crop_region.rotate(angle, expand=True, fillcolor=(255, 255, 255))
 
                     # Random scaling
-                    if random.random() < 0.7:
+                    if random.random() < 0.8:
                         scale = random.uniform(0.9, 1.3)
                         new_crop_w = max(1, int(crop_region.width * scale))
                         new_crop_h = max(1, int(crop_region.height * scale))
@@ -298,16 +301,16 @@ def random_jitter(image: Image.Image, use_ocr=True) -> Image.Image:
                     augmented.paste(crop_region, (paste_x, paste_y))
 
         # Global augmentations: color/brightness/contrast/sharpness
-        if random.random() < 0.5:
+        if random.random() < 0.05:
             factor = random.uniform(0.8, 1.2)
             augmented = ImageEnhance.Color(augmented).enhance(factor)
-        if random.random() < 0.5:
+        if random.random() < 0.05:
             factor = random.uniform(0.8, 1.2)
             augmented = ImageEnhance.Brightness(augmented).enhance(factor)
-        if random.random() < 0.5:
+        if random.random() < 0.05:
             factor = random.uniform(0.8, 1.2)
             augmented = ImageEnhance.Contrast(augmented).enhance(factor)
-        if random.random() < 0.5:
+        if random.random() < 0.05:
             factor = random.uniform(0.8, 1.2)
             augmented = ImageEnhance.Sharpness(augmented).enhance(factor)
 
@@ -316,12 +319,12 @@ def random_jitter(image: Image.Image, use_ocr=True) -> Image.Image:
         translate_x, translate_y = 0, 0
         scale_factor = 1.0
 
-        if random.random() < 0.5:
+        if random.random() < 0.05:
             angle = random.uniform(-2, 2)
-        if random.random() < 0.5:
+        if random.random() < 0.05:
             translate_x = random.uniform(-2, 2)
             translate_y = random.uniform(-2, 2)
-        if random.random() < 0.5:
+        if random.random() < 0.05:
             scale_factor = random.uniform(0.96, 1.04)
 
         angle_rad = np.deg2rad(angle)
@@ -355,7 +358,7 @@ def random_jitter(image: Image.Image, use_ocr=True) -> Image.Image:
 
 
 def create_samples_for_row(row, tmp_dir, processed_dir, subset,
-                           num_color_jitter=5, generate_neg=False, margin=50):
+                           num_color_jitter=5, generate_neg=False, margin=50, text_image_dir="text_image_dir"):
     """
     Creates anchor, pos, and neg samples for a single row from results.csv.
     - anchor: excluded image cropped with margin
@@ -418,7 +421,7 @@ def create_samples_for_row(row, tmp_dir, processed_dir, subset,
             # neg
             if generate_neg:
                 for i in range(num_color_jitter):
-                    jittered_img = random_jitter(resized_crop, use_ocr=True)
+                    jittered_img = random_jitter(resized_crop, use_ocr=True, text_image_dir=text_image_dir)
                     combined_neg = exc_img.copy()
                     combined_neg.paste(jittered_img, (x1, y1))
                     neg_crop = combined_neg.crop((crop_x1, crop_y1, crop_x2, crop_y2))
@@ -428,7 +431,7 @@ def create_samples_for_row(row, tmp_dir, processed_dir, subset,
 
 
 def worker_fn(row, tmp_dir, processed_dir, subset,
-              num_color_jitter=5, generate_neg=False, margin=50):
+              num_color_jitter=5, generate_neg=False, margin=50, text_image_dir="text_image_dir"):
     create_samples_for_row(
         row=row,
         tmp_dir=tmp_dir,
@@ -436,7 +439,8 @@ def worker_fn(row, tmp_dir, processed_dir, subset,
         subset=subset,
         num_color_jitter=num_color_jitter,
         generate_neg=generate_neg,
-        margin=margin
+        margin=margin,
+        text_image_dir=text_image_dir
     )
 
 
@@ -451,7 +455,8 @@ def create_anchor_pos_neg_and_split(processed_dir,
                                     val_ratio=0.1,
                                     test_ratio=0.1,
                                     num_workers=4,
-                                    seed=42):
+                                    seed=42,
+                                    text_image_dir="text_image_dir"):
     csv_path = os.path.join(processed_dir, "results.csv")
     if not os.path.exists(csv_path):
         logging.error(f"results.csv not found in {processed_dir}.")
@@ -496,7 +501,7 @@ def create_anchor_pos_neg_and_split(processed_dir,
             subset = row['subset']
             futures.append(executor.submit(
                 worker_fn, row, tmp_dir, processed_dir, subset,
-                num_color_jitter, generate_neg, margin
+                num_color_jitter, generate_neg, margin, text_image_dir
             ))
         # Show progress bar
         for _ in tqdm(as_completed(futures), total=len(futures), desc="Creating anchor/pos/neg"):
@@ -516,19 +521,16 @@ def main():
 
     args = parse_arguments()
 
-    # (New) Load text images if directory is provided
-    if args.text_image_dir is not None:
-        load_text_image_pool(args.text_image_dir)
-        logging.info(f"Loaded {len(text_images_pool)} text images for augmentation.")
-
-    # Set CUDA device if available
-    if torch.cuda.is_available():
-        device = f"cuda:{args.cuda_device}"
-        torch.cuda.set_device(args.cuda_device)
-        logging.info(f"Using CUDA device: {device}")
-    else:
-        device = "cpu"
-        logging.info("CUDA not available. Using CPU.")
+    os.environ["CUDA_VISIBLE_DEVICES"] = f"{args.cuda_device}"  # 원하는 GPU 번호 지정
+    device="cuda"
+    # # Set CUDA device if available
+    # if torch.cuda.is_available():
+    #     device = f"cuda:{args.cuda_device}"
+    #     torch.cuda.set_device(args.cuda_device)
+    #     logging.info(f"Using CUDA device: {device}")
+    # else:
+    #     device = "cpu"
+    #     logging.info("CUDA not available. Using CPU.")
 
     # Step1: YOLO detection -> results.csv, excluded/cropped images
     preprocess_with_yolo(
@@ -550,7 +552,8 @@ def main():
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
         num_workers=args.num_workers,
-        seed=args.split_seed
+        seed=args.split_seed,
+        text_image_dir=args.text_image_dir
     )
 
     logging.info("=== Preprocessing Complete (YOLO + Anchor/Pos/Neg + Split) ===")
