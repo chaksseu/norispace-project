@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import models
-from torchvision.models import ConvNeXt_Small_Weights
+from torchvision.models import ConvNeXt_Small_Weights, ConvNeXt_Base_Weights
 from sklearn.metrics import (
     precision_recall_fscore_support,
     average_precision_score,
@@ -307,6 +307,9 @@ def get_model(pretrained=True):
     model = models.convnext_small(
         weights=ConvNeXt_Small_Weights.IMAGENET1K_V1 if pretrained else None
     )
+    # model = models.convnext_base(
+    #     weights=ConvNeXt_Base_Weights.IMAGENET1K_V1 if pretrained else None
+    # )
     # Remove the final classification layer to obtain feature embeddings
     model.classifier[2] = nn.Identity()
     return model
@@ -330,6 +333,8 @@ def main():
     # Define transformations using pretrained ConvNeXt-Small weights
     weights = ConvNeXt_Small_Weights.IMAGENET1K_V1
     transform = weights.transforms()
+    # weights = ConvNeXt_Base_Weights.IMAGENET1K_V1
+    # transform = weights.transforms()
 
     # Find all model checkpoints in the model directory
     model_checkpoints = [

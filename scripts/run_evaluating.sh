@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # 설정 변수
-TYPE="augmented_ocr_no_val_test"
+TYPE="augmented_ocr_no_val_one_base_model"
 
-NORMAL_DATA_DIR="processed_dataset_augmented_ocr_neg32_normal_no_val_0130"
+NORMAL_DATA_DIR="processed_dataset_augmented_ocr_neg32_normal_no_val_modified_augmentation_0131"
 FRAUD_DATA_DIR="processed_dataset_augmented_ocr_neg32_fraud_no_val_0130"
-MODEL_DIR="checkpoints_0131_test"
-WANDB_PROJECT_NAME="0131_norispace_project_eval_${TYPE}"
-GPU_NUM=3
+MODEL_DIR="checkpoints_0203_no_val_one_model_base_model"
+WANDB_PROJECT_NAME="0203_norispace_project_eval_no_val_${TYPE}"
+GPU_NUM=1
 
 # evaluate.py 스크립트 실행
 python src/evaluate.py \

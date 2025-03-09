@@ -40,32 +40,27 @@ from tqdm import tqdm
 # ------------------------------------------------------------------------------
 # Global list to hold prepared text images (e.g., from OCR or various fonts/styles)
 # ------------------------------------------------------------------------------
-text_images_pool = []
-
-
-
-
 def load_text_image_pool(folder_path: str):
     """
-    Loads all images from the specified folder_path into 'text_images_pool'.
+    Loads all images from the specified folder_path.
     Each image is assumed to be a single character or text snippet.
-    This can be extended to store any type of text-based images for augmentation.
     """
-    text_images_pool = []
+    pool = []
     if not os.path.isdir(folder_path):
         logging.warning(f"Text image directory '{folder_path}' not found.")
-        return
+        return pool
 
     for fn in os.listdir(folder_path):
         if fn.lower().endswith(('.png', '.jpg', '.jpeg')):
             img_path = os.path.join(folder_path, fn)
             try:
                 timg = Image.open(img_path).convert("RGB")
-                text_images_pool.append(timg)
+                pool.append(timg)
             except Exception as e:
                 logging.warning(f"Failed to load image '{fn}': {e}")
-    return text_images_pool
-# Configure logging to display info messages
+    return pool
+
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 
 def parse_arguments():
@@ -110,120 +105,173 @@ def parse_arguments():
     parser.add_argument("--cuda_device", type=int, default=0,
                         help="CUDA device index (default=0)")
 
-    # (New) Directory containing text images for augmentation
+    # Directory containing text images for augmentation
     parser.add_argument("--text_image_dir", type=str, default=None,
                         help="Directory where text images for augmentation are stored")
 
     args = parser.parse_args()
     return args
 
-# ------------------------------------------------------------------------------
+# ===============================================================================
 # [1] YOLO Inference -> results.csv, excluded_*, cropped_*
-# ------------------------------------------------------------------------------
-def preprocess_with_yolo(yolo_model_path, input_dir, processed_dir,
-                         batch_size=64, label="normal", device="cuda:0"):
+# ===============================================================================
+# 전역 변수로 워커에서 사용할 YOLO 모델을 저장
+yolo_model_global = None
+
+def yolo_worker_init(yolo_model_path, device):
     """
-    Runs YOLO model on all images in 'input_dir' to detect bounding boxes.
-    Saves bounding box info to 'results.csv', and also creates:
-      - excluded_<filename>.png (masked bounding box area)
-      - cropped_<filename>.png  (the bounding box region itself)
+    각 YOLO 워커 프로세스가 시작될 때 모델을 로드하여 전역 변수에 저장합니다.
+    """
+    global yolo_model_global
+    yolo_model_global = YOLO(yolo_model_path).to(device)
+
+def process_yolo_batch_worker(image_paths, tmp_dir, label):
+    """
+    할당받은 이미지 배치를 처리합니다.
+    각 이미지에 대해 검출 결과를 저장하고 cropped/excluded 이미지를 생성합니다.
+    반환되는 리스트는 각 이미지의 정보를 담고 있습니다.
+    """
+    local_csv_data = []
+    results = yolo_model_global(image_paths)
+    for image_path, result in zip(image_paths, results):
+        image_file = os.path.basename(image_path)
+        try:
+            img = Image.open(image_path).convert("RGB")
+            w, h = img.size
+        except Exception as e:
+            logging.warning(f"Failed to load image {image_path}: {e}")
+            continue
+
+        exclude_save_path = os.path.join(tmp_dir, f"excluded_{os.path.splitext(image_file)[0]}.png")
+        crop_save_path = os.path.join(tmp_dir, f"cropped_{os.path.splitext(image_file)[0]}.png")
+
+        if len(result.boxes) > 0:
+            best_box = max(result.boxes, key=lambda box: box.conf[0])
+            x1, y1, x2, y2 = best_box.xyxy[0].cpu().numpy()
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(w, x2), min(h, y2)
+            confidence = float(best_box.conf[0].cpu().numpy())
+            class_id = int(best_box.cls[0].cpu().numpy())
+
+            local_csv_data.append({
+                "original_file": image_file,
+                "label": label,
+                "class_id": class_id,
+                "confidence": confidence,
+                "x1": x1, "y1": y1, "x2": x2, "y2": y2
+            })
+
+            cropped_img = img.crop((x1, y1, x2, y2))
+            cropped_img.save(crop_save_path)
+
+            excluded_img = img.copy()
+            mask = Image.new("L", excluded_img.size, 0)
+            mask.paste(255, (int(x1), int(y1), int(x2), int(y2)))
+            black_img = Image.new("RGB", excluded_img.size, (0, 0, 0))
+            excluded_final = Image.composite(black_img, excluded_img, mask)
+            excluded_final.save(exclude_save_path)
+    return local_csv_data
+
+def preprocess_with_yolo(yolo_model_path, input_dir, processed_dir,
+                         batch_size=64, label="normal", device="cuda:0", num_workers=1):
+    """
+    YOLO 모델을 이용해 'input_dir'의 모든 이미지에서 bounding box를 검출합니다.
+    결과는 'results.csv'로 저장되며, 각 이미지에 대해 cropped와 excluded 이미지를 생성합니다.
     """
     logging.info("[Step1] Running YOLO detection and generating excluded/cropped images.")
-
     tmp_dir = os.path.join(processed_dir, "tmp")
     os.makedirs(tmp_dir, exist_ok=True)
 
-    model = YOLO(yolo_model_path).to(device)
-    csv_data = []
-
-    def process_batch(image_paths):
-        results = model(image_paths)
-        for image_path, result in zip(image_paths, results):
-            image_file = os.path.basename(image_path)
-            try:
-                img = Image.open(image_path).convert("RGB")
-                w, h = img.size
-            except Exception as e:
-                logging.warning(f"Failed to load image {image_path}: {e}")
-                continue
-
-            exclude_save_path = os.path.join(tmp_dir, f"excluded_{os.path.splitext(image_file)[0]}.png")
-            crop_save_path = os.path.join(tmp_dir, f"cropped_{os.path.splitext(image_file)[0]}.png")
-
-            if len(result.boxes) > 0:
-                # Take the bounding box with the highest confidence
-                best_box = max(result.boxes, key=lambda box: box.conf[0])
-                x1, y1, x2, y2 = best_box.xyxy[0].cpu().numpy()
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(w, x2), min(h, y2)
-                confidence = float(best_box.conf[0].cpu().numpy())
-                class_id = int(best_box.cls[0].cpu().numpy())
-
-                # Record bounding box info
-                csv_data.append({
-                    "original_file": image_file,
-                    "label": label,
-                    "class_id": class_id,
-                    "confidence": confidence,
-                    "x1": x1, "y1": y1, "x2": x2, "y2": y2
-                })
-
-                # Save cropped region
-                cropped_img = img.crop((x1, y1, x2, y2))
-                cropped_img.save(crop_save_path)
-
-                # Save excluded image (bounding box area masked)
-                excluded_img = img.copy()
-                mask = Image.new("L", excluded_img.size, 0)
-                mask.paste(255, (int(x1), int(y1), int(x2), int(y2)))
-                black_img = Image.new("RGB", excluded_img.size, (0, 0, 0))
-                excluded_final = Image.composite(black_img, excluded_img, mask)
-                excluded_final.save(exclude_save_path)
-
-    # Collect all images
     all_images = []
-    for root, dirs, files in os.walk(input_dir):
+    for root, _, files in os.walk(input_dir):
         for fname in files:
             if fname.lower().endswith(('.jpg', '.jpeg', '.png', '.tif', '.bmp')):
                 all_images.append(os.path.join(root, fname))
 
-    # Process in batches
-    for i in tqdm(range(0, len(all_images), batch_size), desc="Processing Batches"):
-        batch = all_images[i: i + batch_size]
-        process_batch(batch)
+    csv_data = []
+    batches = [all_images[i: i + batch_size] for i in range(0, len(all_images), batch_size)]
 
-    # Save bounding box info to CSV
+    if num_workers > 1:
+        with ProcessPoolExecutor(max_workers=num_workers,
+                                  initializer=yolo_worker_init,
+                                  initargs=(yolo_model_path, device)) as executor:
+            futures = [executor.submit(process_yolo_batch_worker, batch, tmp_dir, label) for batch in batches]
+            for future in tqdm(as_completed(futures), total=len(futures), desc="YOLO Batches"):
+                try:
+                    csv_data.extend(future.result())
+                except Exception as e:
+                    logging.error(f"Error in YOLO worker: {e}")
+    else:
+        model = YOLO(yolo_model_path).to(device)
+        for batch in tqdm(batches, desc="Processing Batches"):
+            results = model(batch)
+            for image_path, result in zip(batch, results):
+                image_file = os.path.basename(image_path)
+                try:
+                    img = Image.open(image_path).convert("RGB")
+                    w, h = img.size
+                except Exception as e:
+                    logging.warning(f"Failed to load image {image_path}: {e}")
+                    continue
+
+                exclude_save_path = os.path.join(tmp_dir, f"excluded_{os.path.splitext(image_file)[0]}.png")
+                crop_save_path = os.path.join(tmp_dir, f"cropped_{os.path.splitext(image_file)[0]}.png")
+
+                if len(result.boxes) > 0:
+                    best_box = max(result.boxes, key=lambda box: box.conf[0])
+                    x1, y1, x2, y2 = best_box.xyxy[0].cpu().numpy()
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(w, x2), min(h, y2)
+                    confidence = float(best_box.conf[0].cpu().numpy())
+                    class_id = int(best_box.cls[0].cpu().numpy())
+
+                    csv_data.append({
+                        "original_file": image_file,
+                        "label": label,
+                        "class_id": class_id,
+                        "confidence": confidence,
+                        "x1": x1, "y1": y1, "x2": x2, "y2": y2
+                    })
+
+                    cropped_img = img.crop((x1, y1, x2, y2))
+                    cropped_img.save(crop_save_path)
+
+                    excluded_img = img.copy()
+                    mask = Image.new("L", excluded_img.size, 0)
+                    mask.paste(255, (int(x1), int(y1), int(x2), int(y2)))
+                    black_img = Image.new("RGB", excluded_img.size, (0, 0, 0))
+                    excluded_final = Image.composite(black_img, excluded_img, mask)
+                    excluded_final.save(exclude_save_path)
+
     df = pd.DataFrame(csv_data)
     df_path = os.path.join(processed_dir, "results.csv")
     df.to_csv(df_path, index=False)
     logging.info(f"YOLO preprocessing completed. Results saved to: {df_path}")
 
+# ===============================================================================
+# [2] OCR-based Augmentation -> anchor/pos/neg samples
+# ===============================================================================
+# global OCR 리더 (각 워커 프로세스에서 한 번만 생성)
+ocr_reader_global = None
 
-# ------------------------------------------------------------------------------
-# [2] OCR-based Augmentation -> anchor/pos/neg
-# ------------------------------------------------------------------------------
+def sample_worker_init():
+    """
+    각 샘플 생성 워커가 시작될 때 OCR 리더를 전역 변수에 저장합니다.
+    """
+    global ocr_reader_global
+    ocr_reader_global = easyocr.Reader(['en'], gpu=True)
+
 def random_jitter(image: Image.Image, use_ocr=True, text_image_dir="text_image_dir") -> Image.Image:
-    """
-    Applies random augmentation to 'image':
-    1) OCR detection on text regions
-    2) For each text region:
-       - (A) Distort original text region, OR
-       - (B) Replace with a randomly selected text image from 'text_images_pool'
-         (with random resizing / padding)
-    3) Apply global color/brightness/contrast/sharpness changes and affine transform
-    """
     try:
         augmented = image.copy()
         cv_img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
         if use_ocr:
-            reader = easyocr.Reader(['en'], gpu=True)
-            results = reader.readtext(cv_img, detail=1)  # returns [(bbox, text, conf), ...]
-
+            global ocr_reader_global
+            results = ocr_reader_global.readtext(cv_img, detail=1)
             for detection in results:
                 bbox, text, conf = detection
                 if conf < 0.6:
-                    # Skip low-confidence text
                     continue
 
                 (topleft, topright, botright, botleft) = bbox
@@ -231,39 +279,25 @@ def random_jitter(image: Image.Image, use_ocr=True, text_image_dir="text_image_d
                 y_min = int(min(topleft[1], topright[1]))
                 x_max = int(max(botright[0], topright[0]))
                 y_max = int(max(botright[1], botleft[1]))
-
-                # Ensure valid region
                 if x_min < 0 or y_min < 0 or x_max <= x_min or y_max <= y_min:
                     continue
 
                 region_w = x_max - x_min
                 region_h = y_max - y_min
 
-                text_images_pool = load_text_image_pool(text_image_dir)
-
-                # Decide whether to use a text image from the pool or to distort the original
-                
-                if text_images_pool and random.random() < 0.3:
-                    # (B) Replace with a random text image
-                    text_img = random.choice(text_images_pool)
-                    # Random padding
+                pool = load_text_image_pool(text_image_dir)
+                if pool and random.random() < 0.3:
+                    text_img = random.choice(pool)
                     pad_x = random.randint(-5, 5)
                     pad_y = random.randint(-5, 5)
                     new_w = max(1, region_w + pad_x)
                     new_h = max(1, region_h + pad_y)
                     text_img_resized = text_img.resize((new_w, new_h), Image.BILINEAR)
-
-                    # Center the replaced image in the region
                     paste_x = x_min + (region_w - new_w) // 2
                     paste_y = y_min + (region_h - new_h) // 2
-
                     augmented.paste(text_img_resized, (paste_x, paste_y))
-
                 else:
-                    # (A) Distort the original text region
                     crop_region = augmented.crop((x_min, y_min, x_max, y_max))
-
-                    # Random color/brightness/contrast/sharpness
                     if random.random() < 0.8:
                         factor = random.uniform(0.8, 1.2)
                         crop_region = ImageEnhance.Color(crop_region).enhance(factor)
@@ -276,31 +310,20 @@ def random_jitter(image: Image.Image, use_ocr=True, text_image_dir="text_image_d
                     if random.random() < 0.8:
                         factor = random.uniform(0.8, 1.2)
                         crop_region = ImageEnhance.Sharpness(crop_region).enhance(factor)
-
-                    # Random rotation
                     if random.random() < 0.5:
                         angle = random.uniform(-5, 5)
                         crop_region = crop_region.rotate(angle, expand=True, fillcolor=(255, 255, 255))
-
-                    # Random scaling
                     if random.random() < 0.8:
                         scale = random.uniform(0.9, 1.3)
                         new_crop_w = max(1, int(crop_region.width * scale))
                         new_crop_h = max(1, int(crop_region.height * scale))
                         crop_region = crop_region.resize((new_crop_w, new_crop_h), Image.BICUBIC)
-
-                    # Random translation
-                    dx, dy = 0, 0
-                    if random.random() < 0.5:
-                        dx = random.randint(-2, 2)
-                        dy = random.randint(-2, 2)
-
-                    # Place the augmented region back
+                    dx = random.randint(-2, 2) if random.random() < 0.5 else 0
+                    dy = random.randint(-2, 2) if random.random() < 0.5 else 0
                     paste_x = max(0, min(augmented.width - crop_region.width, x_min + dx))
                     paste_y = max(0, min(augmented.height - crop_region.height, y_min + dy))
                     augmented.paste(crop_region, (paste_x, paste_y))
 
-        # Global augmentations: color/brightness/contrast/sharpness
         if random.random() < 0.2:
             factor = random.uniform(0.8, 1.2)
             augmented = ImageEnhance.Color(augmented).enhance(factor)
@@ -314,18 +337,10 @@ def random_jitter(image: Image.Image, use_ocr=True, text_image_dir="text_image_d
             factor = random.uniform(0.8, 1.2)
             augmented = ImageEnhance.Sharpness(augmented).enhance(factor)
 
-        # Global affine transform
-        angle = 0
-        translate_x, translate_y = 0, 0
-        scale_factor = 1.0
-
-        if random.random() < 0.2:
-            angle = random.uniform(-2, 2)
-        if random.random() < 0.2:
-            translate_x = random.uniform(-2, 2)
-            translate_y = random.uniform(-2, 2)
-        if random.random() < 0.2:
-            scale_factor = random.uniform(0.96, 1.04)
+        angle = random.uniform(-2, 2) if random.random() < 0.2 else 0
+        translate_x = random.uniform(-2, 2) if random.random() < 0.2 else 0
+        translate_y = random.uniform(-2, 2) if random.random() < 0.2 else 0
+        scale_factor = random.uniform(0.96, 1.04) if random.random() < 0.2 else 1.0
 
         angle_rad = np.deg2rad(angle)
         cos_t = np.cos(angle_rad) * scale_factor
@@ -333,7 +348,6 @@ def random_jitter(image: Image.Image, use_ocr=True, text_image_dir="text_image_d
 
         w, h = augmented.size
         cx, cy = w / 2, h / 2
-
         a = cos_t
         b = sin_t
         c = (1 - cos_t) * cx - sin_t * cy + translate_x
@@ -349,22 +363,14 @@ def random_jitter(image: Image.Image, use_ocr=True, text_image_dir="text_image_d
             resample=Image.BICUBIC,
             fillcolor=(255, 255, 255)
         )
-
         return final_img
 
     except Exception as e:
         logging.error(f"random_jitter error: {e}")
         return image
 
-
 def create_samples_for_row(row, tmp_dir, processed_dir, subset,
                            num_color_jitter=5, generate_neg=False, margin=50, text_image_dir="text_image_dir"):
-    """
-    Creates anchor, pos, and neg samples for a single row from results.csv.
-    - anchor: excluded image cropped with margin
-    - pos: bounding box is pasted on anchor and cropped with margin
-    - neg: uses random_jitter (OCR-based augmentation) to generate multiple negative samples
-    """
     file_name = row["original_file"]
     label = row["label"]
     x1, y1, x2, y2 = row["x1"], row["y1"], row["x2"], row["y2"]
@@ -376,32 +382,27 @@ def create_samples_for_row(row, tmp_dir, processed_dir, subset,
     excluded_path = os.path.join(tmp_dir, f"excluded_{os.path.splitext(file_name)[0]}.png")
     cropped_path = os.path.join(tmp_dir, f"cropped_{os.path.splitext(file_name)[0]}.png")
 
-    # Check bounding box validity
     if pd.isnull(x1) or pd.isnull(y1) or pd.isnull(x2) or pd.isnull(y2):
         return
 
     x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
     if (x2 - x1) <= 0 or (y2 - y1) <= 0:
         return
-
     if not os.path.exists(excluded_path):
         return
 
     with Image.open(excluded_path).convert("RGB") as exc_img:
         w, h = exc_img.size
-        # Apply margin
         crop_x1 = max(x1 - margin, 0)
         crop_y1 = max(y1 - margin, 0)
         crop_x2 = min(x2 + margin, w)
         crop_y2 = min(y2 + margin, h)
 
-        # anchor
         anchor_crop = exc_img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
         anchor_filename = f"{os.path.splitext(file_name)[0]}_anchor.png"
         anchor_save_path = os.path.join(anchor_dir, anchor_filename)
         anchor_crop.save(anchor_save_path)
 
-        # pos
         if not os.path.exists(cropped_path):
             return
         with Image.open(cropped_path).convert("RGB") as cr_img:
@@ -410,7 +411,6 @@ def create_samples_for_row(row, tmp_dir, processed_dir, subset,
                 return
 
             resized_crop = cr_img.resize((bw, bh), Image.BILINEAR)
-
             combined_pos = exc_img.copy()
             combined_pos.paste(resized_crop, (x1, y1))
             pos_crop = combined_pos.crop((crop_x1, crop_y1, crop_x2, crop_y2))
@@ -418,7 +418,6 @@ def create_samples_for_row(row, tmp_dir, processed_dir, subset,
             pos_save_path = os.path.join(pos_dir, pos_filename)
             pos_crop.save(pos_save_path)
 
-            # neg
             if generate_neg:
                 for i in range(num_color_jitter):
                     jittered_img = random_jitter(resized_crop, use_ocr=True, text_image_dir=text_image_dir)
@@ -428,7 +427,6 @@ def create_samples_for_row(row, tmp_dir, processed_dir, subset,
                     neg_filename = f"{os.path.splitext(file_name)[0]}_neg_{i}.png"
                     neg_save_path = os.path.join(neg_dir, neg_filename)
                     neg_crop.save(neg_save_path)
-
 
 def worker_fn(row, tmp_dir, processed_dir, subset,
               num_color_jitter=5, generate_neg=False, margin=50, text_image_dir="text_image_dir"):
@@ -443,10 +441,9 @@ def worker_fn(row, tmp_dir, processed_dir, subset,
         text_image_dir=text_image_dir
     )
 
-
-# ------------------------------------------------------------------------------
-# [3] Split into train/val/test
-# ------------------------------------------------------------------------------
+# ===============================================================================
+# [3] Split into train/val/test and sample generation
+# ===============================================================================
 def create_anchor_pos_neg_and_split(processed_dir,
                                     num_color_jitter=5,
                                     generate_neg=False,
@@ -462,22 +459,16 @@ def create_anchor_pos_neg_and_split(processed_dir,
         logging.error(f"results.csv not found in {processed_dir}.")
         return
     df = pd.read_csv(csv_path)
-    if len(df) == 0:
+    if df.empty:
         logging.warning("results.csv is empty.")
         return
 
     total_samples = len(df)
     logging.info(f"Total samples: {total_samples}")
-
-    # Shuffle the data
     df = df.sample(frac=1, random_state=seed).reset_index(drop=True)
-
-    # Determine the number of samples for each subset
     train_count = int(total_samples * train_ratio)
     val_count = int(total_samples * val_ratio)
     test_count = total_samples - train_count - val_count
-
-    # Assign subset labels
     df['subset'] = ['train'] * train_count + ['val'] * val_count + ['test'] * test_count
 
     tmp_dir = os.path.join(processed_dir, "tmp")
@@ -485,7 +476,7 @@ def create_anchor_pos_neg_and_split(processed_dir,
         logging.error(f"Temporary directory does not exist: {tmp_dir}")
         return
 
-    # Create output directories
+    # 각 subset에 대해 디렉토리 생성
     for sp in ["train", "val", "test"]:
         for sub_dir in ["anchor", "pos", "neg"]:
             sp_dir = os.path.join(processed_dir, sp, sub_dir)
@@ -494,8 +485,8 @@ def create_anchor_pos_neg_and_split(processed_dir,
     rows = df.to_dict("records")
     logging.info("[Step2] Creating anchor/pos/neg samples...")
 
-    # Parallel processing
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+    # 샘플 생성 워커에 OCR 리더 초기화를 위해 initializer 지정
+    with ProcessPoolExecutor(max_workers=num_workers, initializer=sample_worker_init) as executor:
         futures = []
         for row in rows:
             subset = row['subset']
@@ -503,7 +494,6 @@ def create_anchor_pos_neg_and_split(processed_dir,
                 worker_fn, row, tmp_dir, processed_dir, subset,
                 num_color_jitter, generate_neg, margin, text_image_dir
             ))
-        # Show progress bar
         for _ in tqdm(as_completed(futures), total=len(futures), desc="Creating anchor/pos/neg"):
             pass
 
@@ -511,38 +501,29 @@ def create_anchor_pos_neg_and_split(processed_dir,
     shutil.rmtree(tmp_dir, ignore_errors=True)
     logging.info(f"Temporary directory removed: {tmp_dir}")
 
-
 def main():
     try:
-        # Ensure the multiprocessing start method is 'spawn'
         multiprocessing.set_start_method("spawn")
     except RuntimeError:
         pass
 
     args = parse_arguments()
+    os.environ["CUDA_VISIBLE_DEVICES"] = f"{args.cuda_device}"
+    # device 설정: 필요에 따라 "cuda" 또는 "cpu" 선택
+    device = "cpu"
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = f"{args.cuda_device}"  # 원하는 GPU 번호 지정
-    device="cuda"
-    # # Set CUDA device if available
-    # if torch.cuda.is_available():
-    #     device = f"cuda:{args.cuda_device}"
-    #     torch.cuda.set_device(args.cuda_device)
-    #     logging.info(f"Using CUDA device: {device}")
-    # else:
-    #     device = "cpu"
-    #     logging.info("CUDA not available. Using CPU.")
-
-    # Step1: YOLO detection -> results.csv, excluded/cropped images
+    # Step 1: YOLO detection
     preprocess_with_yolo(
         yolo_model_path=args.yolo_model_path,
         input_dir=args.input_dir,
         processed_dir=args.processed_dir,
         batch_size=args.batch_size,
         label=args.label,
-        device="cpu"
+        device=device,
+        num_workers=args.num_workers
     )
 
-    # Step2: Create anchor/pos/neg samples and split
+    # Step 2: Create anchor/pos/neg samples and split dataset
     create_anchor_pos_neg_and_split(
         processed_dir=args.processed_dir,
         num_color_jitter=args.num_color_jitter,
@@ -557,7 +538,6 @@ def main():
     )
 
     logging.info("=== Preprocessing Complete (YOLO + Anchor/Pos/Neg + Split) ===")
-
 
 if __name__ == "__main__":
     main()

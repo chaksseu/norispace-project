@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import models
-from torchvision.models import ConvNeXt_Small_Weights
+from torchvision.models import ConvNeXt_Small_Weights, ConvNeXt_Base_Weights
 from accelerate import Accelerator
 from tqdm import tqdm
 
@@ -48,7 +48,6 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--eval_epoch", type=int, default=1)
     parser.add_argument("--save_epoch", type=int, default=5)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
@@ -284,6 +283,7 @@ def main():
 
     # Define transformations using pretrained ConvNeXt-Small weights
     weights = ConvNeXt_Small_Weights.IMAGENET1K_V1
+    # weights = ConvNeXt_Base_Weights.IMAGENET1K_V1
     transform = weights.transforms()
 
     #---------------------------------------------------------------------------
@@ -314,9 +314,6 @@ def main():
     #---------------------------------------------------------------------------
     # (2) Val / Test Dataset: Normal + Fraud => anchor-pos
     #---------------------------------------------------------------------------
-    val_dataset = MixedValTestDataset(
-        args.normal_data_dir, args.fraud_data_dir, mode="val", transform=transform
-    )
     test_dataset = MixedValTestDataset(
         args.normal_data_dir, args.fraud_data_dir, mode="test", transform=transform
     )
@@ -333,13 +330,6 @@ def main():
             labels.append(b["label"])
         return torch.stack(anchors), torch.stack(poss), torch.tensor(labels, dtype=torch.long)
 
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        collate_fn=collate_fn_eval
-    )
     test_loader = DataLoader(
         test_dataset,
         batch_size=args.batch_size,
@@ -358,16 +348,19 @@ def main():
         model = models.convnext_small(
             weights=ConvNeXt_Small_Weights.IMAGENET1K_V1 if pretrained else None
         )
+        # model = models.convnext_base(
+        #     weights=ConvNeXt_Base_Weights.IMAGENET1K_V1 if pretrained else None
+        # )
         # Remove the final classification layer to obtain feature embeddings
         model.classifier[2] = nn.Identity()
         return model
 
     anchor_model = get_model(pretrained=args.pretrained)
-    posneg_model = get_model(pretrained=args.pretrained)
+    # posneg_model = get_model(pretrained=args.pretrained)
 
     # Initialize the optimizer with parameters from both models
     optimizer = optim.AdamW(
-        list(anchor_model.parameters()) + list(posneg_model.parameters()),
+        list(anchor_model.parameters()),# + list(posneg_model.parameters()),
         lr=args.lr
     )
     criterion = TripletLoss(margin=1.0)
@@ -375,17 +368,15 @@ def main():
     # Prepare models, optimizer, and data loaders with Accelerator
     (
         anchor_model,
-        posneg_model,
+        # posneg_model,
         optimizer,
         train_loader,
-        val_loader,
         test_loader
     ) = accelerator.prepare(
         anchor_model,
-        posneg_model,
+        # posneg_model,
         optimizer,
         train_loader,
-        val_loader,
         test_loader
     )
 
@@ -399,8 +390,11 @@ def main():
         Computes normalized embeddings for anchor, positive, and negative samples.
         """
         anc_emb = anchor_model(anc)
-        pos_emb = posneg_model(pos)
-        neg_emb = posneg_model(neg)
+        # pos_emb = posneg_model(pos)
+        # neg_emb = posneg_model(neg)
+        pos_emb = anchor_model(pos)
+        neg_emb = anchor_model(neg)
+
         anc_emb = nn.functional.normalize(anc_emb, p=2, dim=1)
         pos_emb = nn.functional.normalize(pos_emb, p=2, dim=1)
         neg_emb = nn.functional.normalize(neg_emb, p=2, dim=1)
@@ -415,7 +409,7 @@ def main():
         """
         nonlocal global_step
         anchor_model.train()
-        posneg_model.train()
+        # posneg_model.train()
 
         total_loss = 0.0
         total_samples = 0
@@ -447,88 +441,10 @@ def main():
                 if accelerator.is_main_process:
                     global_step += 1
                     wandb.log({"train_step_loss": loss.item() * args.gradient_accumulation_steps})
-                    # pbar.update(1)  # 제거
-                    # pbar.set_postfix(loss=loss.item() * args.gradient_accumulation_steps)  # 제거
 
         avg_loss = total_loss / total_samples if total_samples else 0.0
         return avg_loss
 
-    #---------------------------------------------------------------------------
-    # Evaluation: Normal (0) vs Fraud (1) Classification
-    #         Uses discrete predictions based on distance thresholds
-    #---------------------------------------------------------------------------
-    def evaluate_balanced(loader, phase="val"):
-        """
-        Evaluates the model by computing distances between anchor and positive embeddings.
-        Logs key metrics directly to W&B without using tables.
-        """
-        anchor_model.eval()
-        posneg_model.eval()
-
-        all_distances = []
-        all_labels = []
-
-        total_val_loss = 0.0
-        total_val_samples = 0
-
-        with torch.no_grad():
-            for anc, imgs, labels in loader:
-                anc = anc.to(accelerator.device)
-                imgs = imgs.to(accelerator.device)
-                labels = labels.cpu().numpy()  # normal=0, fraud=1
-
-                # Compute embeddings
-                anc_emb = anchor_model(anc)
-                img_emb = posneg_model(imgs)
-                anc_emb = nn.functional.normalize(anc_emb, p=2, dim=1)
-                img_emb = nn.functional.normalize(img_emb, p=2, dim=1)
-
-                # Compute pairwise distances
-                dist = torch.nn.functional.pairwise_distance(anc_emb, img_emb)
-                dist = dist.cpu().numpy()
-
-                all_distances.extend(dist)
-                all_labels.extend(labels)
-
-        all_distances = np.array(all_distances)
-        all_labels = np.array(all_labels)
-
-        # Skip evaluation if only one class is present
-        if len(np.unique(all_labels)) < 2:
-            if accelerator.is_main_process:
-                wandb.log({f"{phase}/info": "Only one class present, metrics undefined."})
-            return
-
-        # Calculate average distances for each class
-        avg_distance_normal = np.mean(all_distances[all_labels == 0])
-        avg_distance_fraud = np.mean(all_distances[all_labels == 1])
-
-        if accelerator.is_main_process:
-            wandb.log({
-                f"{phase}/avg_distance_normal": avg_distance_normal,
-                f"{phase}/avg_distance_fraud": avg_distance_fraud,
-            })
-
-        fpr, tpr, thresholds = roc_curve(all_labels, all_distances)
-        roc_auc = roc_auc_score(all_labels, all_distances)
-
-        precision, recall, _ = precision_recall_curve(all_labels, all_distances)
-        pr_auc = auc(recall, precision)
-        avg_precision = average_precision_score(all_labels, all_distances) 
-
-        if accelerator.is_main_process:
-            # Log Average Precision and ROC AUC
-            wandb.log({f"{phase}/roc_auc_value": roc_auc})
-            wandb.log({f"{phase}/pr_auc_value": pr_auc})
-            wandb.log({f"{phase}/avg_precision": avg_precision})
-
-            # Log the number of Normal and Fraud samples
-            num_normal = np.sum(all_labels == 0)
-            num_fraud = np.sum(all_labels == 1)
-            wandb.log({
-                f"{phase}/num_normal": int(num_normal),
-                f"{phase}/num_fraud": int(num_fraud)
-            })
 
     #---------------------------------------------------------------------------
     # 에폭 단위로 tqdm 초기화
@@ -539,26 +455,12 @@ def main():
         # Train for one epoch
         train_loss = train_one_epoch(train_loader, epoch)
 
-        # Perform evaluation if required
-        if (epoch % args.eval_epoch) == 0:
-            # Perform evaluation on the validation set
-            evaluate_balanced(val_loader, phase="val")
-
-            if accelerator.is_main_process:
-                # Log epoch-level metrics
-                wandb.log({
-                    "epoch": epoch,
-                    "train_loss": train_loss,
-                    #"val_loss": val_loss,
-                })
-        else:
-            if accelerator.is_main_process:
-                # Log epoch-level metrics even if not evaluating
-                wandb.log({
-                    "epoch": epoch,
-                    "train_loss": train_loss,
-                    #"val_loss": val_loss,
-                })
+        if accelerator.is_main_process:
+            # Log epoch-level metrics even if not evaluating
+            wandb.log({
+                "epoch": epoch,
+                "train_loss": train_loss,
+            })
 
         # Save model checkpoints at specified epochs
         if (epoch % args.save_epoch) == 0 and accelerator.is_main_process:
@@ -566,7 +468,8 @@ def main():
             torch.save({
                 'epoch': epoch,
                 'anchor_model_state': anchor_model.state_dict(),
-                'posneg_model_state': posneg_model.state_dict(),
+                # 'posneg_model_state': posneg_model.state_dict(),
+                'posneg_model_state': anchor_model.state_dict(),
                 'optimizer_state': optimizer.state_dict(),
             }, ckpt_path)
             print(f"Saved checkpoint to {ckpt_path}")

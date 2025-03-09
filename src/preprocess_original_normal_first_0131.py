@@ -19,22 +19,22 @@ def augment_image(filename, input_dir, output_dir, num_augmentations, valid_exte
                 # 랜덤 색조 전처리 적용
                 # Color
                 if random.random() < 0.8:
-                    factor = random.uniform(0.8, 1.2)
+                    factor = random.uniform(0.6, 1.4)
                     augmented_img = ImageEnhance.Color(augmented_img).enhance(factor)
 
                 # Brightness
                 if random.random() < 0.8:
-                    factor = random.uniform(0.8, 1.2)
+                    factor = random.uniform(0.6, 1.4)
                     augmented_img = ImageEnhance.Brightness(augmented_img).enhance(factor)
 
                 # Contrast
                 if random.random() < 0.8:
-                    factor = random.uniform(0.8, 1.2)
+                    factor = random.uniform(0.6, 1.4)
                     augmented_img = ImageEnhance.Contrast(augmented_img).enhance(factor)
 
                 # Sharpness
                 if random.random() < 0.8:
-                    factor = random.uniform(0.8, 1.2)
+                    factor = random.uniform(0.6, 1.4)
                     augmented_img = ImageEnhance.Sharpness(augmented_img).enhance(factor)
 
                 # 고유한 파일명 생성
@@ -65,7 +65,6 @@ def main(input_dir, output_dir, num_augmentations=1):
     
     # 멀티프로세싱을 위한 Pool 설정 (CPU 코어 수에 맞춤)
     pool_size = cpu_count()
-    pool = Pool(pool_size)
     
     # 부분 함수 생성
     func = partial(
@@ -76,13 +75,10 @@ def main(input_dir, output_dir, num_augmentations=1):
         valid_extensions=valid_extensions
     )
     
-    # tqdm을 사용하여 진행 상황 표시
-    results = []
-    for result in tqdm(pool.imap_unordered(func, image_files), total=len(image_files)):
-        results.append(result)
-    
-    pool.close()
-    pool.join()
+    # Pool을 컨텍스트 매니저로 사용하여 자동 종료 보장
+    with Pool(pool_size) as pool:
+        # tqdm을 사용하여 진행 상황 표시
+        results = list(tqdm(pool.imap_unordered(func, image_files), total=len(image_files), desc="증강 진행 중"))
     
     # 결과 출력
     for res in results:
@@ -95,13 +91,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--input_dir",
         type=str,
-        default="dataset",
+        default="dataset/normal",
         help="원본 이미지가 있는 폴더 경로"
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="augmented_dataset",
+        default="augmented_dataset/normal",
         help="증강된 이미지를 저장할 폴더 경로"
     )
     parser.add_argument(
